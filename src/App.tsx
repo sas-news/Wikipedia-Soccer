@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices } from 'lucide-react';
+import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe } from 'lucide-react';
+import { io, Socket } from 'socket.io-client';
 
-type Phase = 'settings' | 'history' | 'setup_p1' | 'setup_p2' | 'confirm' | 'playing' | 'won';
+type Phase = 'settings' | 'history' | 'setup_p1' | 'setup_p2' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting';
 
 type HistoryEntry = { title: string; player: 1 | 2 };
 
@@ -65,9 +66,120 @@ export default function App() {
   const [hasSaveData, setHasSaveData] = useState(false);
   const [hasReachedConfirm, setHasReachedConfirm] = useState(false);
 
+  // Online Multiplayer State
+  const [isOnline, setIsOnline] = useState(false);
+  const [roomId, setRoomId] = useState('');
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [myPlayerNum, setMyPlayerNum] = useState<1 | 2 | null>(null);
+
   useEffect(() => {
     setHasSaveData(!!localStorage.getItem(SAVE_KEY));
   }, [phase]);
+
+  // Online Multiplayer Socket Logic
+  useEffect(() => {
+    if (!socket) return;
+    
+    socket.on('sync_state', (state: any) => {
+      setStartPageMode(state.startPageMode);
+      setCustomStartPage(state.customStartPage);
+      setMovesPhase1(state.movesPhase1);
+      setMovesPhaseN(state.movesPhaseN);
+      setTurnTimeLimit(state.turnTimeLimit);
+      setP1Target(state.p1Target);
+      setP2Target(state.p2Target);
+      setCurrentPlayer(state.currentPlayer);
+      setTurnCount(state.turnCount);
+      setMovesMade(state.movesMade);
+      setCurrentPage(state.currentPage);
+      setTurnHistory(state.turnHistory);
+      setGlobalHistory(state.globalHistory);
+      setTimeLeft(state.timeLeft);
+      setWinner(state.winner);
+      setPhase(state.phase);
+    });
+
+    socket.on('sync_scroll', (data: { scrollY: number }) => {
+      if (myPlayerNum !== currentPlayer) {
+        // Send to iframe
+        const iframe = document.querySelector('iframe');
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: 'SYNC_SCROLL', scrollY: data.scrollY }, '*');
+        }
+      }
+    });
+
+    return () => {
+      socket.off('sync_state');
+      socket.off('sync_scroll');
+    };
+  }, [socket, myPlayerNum, currentPlayer]);
+
+  const emitStateUpdate = (newStatePart: any) => {
+    if (isOnline && socket && roomId) {
+      socket.emit('sync_state', {
+        roomId,
+        state: {
+          startPageMode,
+          customStartPage,
+          movesPhase1,
+          movesPhaseN,
+          turnTimeLimit,
+          p1Target,
+          p2Target,
+          currentPlayer,
+          turnCount,
+          movesMade,
+          currentPage,
+          turnHistory,
+          globalHistory,
+          timeLeft,
+          winner,
+          phase,
+          ...newStatePart
+        }
+      });
+    }
+  };
+
+  const joinRoom = () => {
+    if (!roomId) {
+      showToast('Room IDを入力してください');
+      return;
+    }
+    const newSocket = io();
+    setSocket(newSocket);
+    
+    newSocket.emit('join_room', roomId);
+    newSocket.on('room_full', () => {
+      showToast('ルームが満員です');
+      newSocket.disconnect();
+      setSocket(null);
+    });
+    newSocket.on('joined', (data: { playerNum: 1 | 2 }) => {
+      setMyPlayerNum(data.playerNum);
+      setIsOnline(true);
+      setPhase('online_waiting');
+      
+      newSocket.on('game_ready', () => {
+        setPhase('setup_p1');
+        if (data.playerNum === 1) {
+          // P1 emits their initial settings to P2
+          newSocket.emit('sync_state', {
+            roomId,
+            state: {
+              startPageMode,
+              customStartPage,
+              movesPhase1,
+              movesPhaseN,
+              turnTimeLimit,
+              phase: 'setup_p1'
+            }
+          });
+        }
+      });
+    });
+  };
 
   const maxMoves = turnCount === 1 ? movesPhase1 : movesPhaseN;
   const currentTarget = currentPlayer === 1 ? p1Target : p2Target;
@@ -82,7 +194,9 @@ export default function App() {
       showToast('目標ページを設定してください');
       return;
     }
-    setPhase(hasReachedConfirm ? 'confirm' : 'setup_p2');
+    const nextPhase = hasReachedConfirm ? 'confirm' : 'setup_p2';
+    setPhase(nextPhase);
+    emitStateUpdate({ p1Target, phase: nextPhase });
   };
 
   const fetchRandomTarget = async (setTarget: (target: string) => void) => {
@@ -121,6 +235,17 @@ export default function App() {
       setWinner(null);
       setTimeLeft(turnTimeLimit);
       setPhase('playing');
+      emitStateUpdate({
+        currentPage: startPage,
+        globalHistory: [{ title: startPage, player: 1 }],
+        turnHistory: [startPage],
+        currentPlayer: 1,
+        turnCount: 1,
+        movesMade: 0,
+        winner: null,
+        timeLeft: turnTimeLimit,
+        phase: 'playing'
+      });
     } catch (e) {
       showToast('ランダム記事の取得に失敗しました');
     } finally {
@@ -130,6 +255,10 @@ export default function App() {
 
   const handleLinkClick = (rawTitle: string) => {
     if (phase !== 'playing') return;
+    if (isOnline && myPlayerNum !== currentPlayer) {
+      showToast('相手のターン中です');
+      return;
+    }
 
     let decodedTitle = '';
     try {
@@ -162,6 +291,7 @@ export default function App() {
       const pastRecords = JSON.parse(localStorage.getItem('wiki_soccer_past_records') || '[]');
       localStorage.setItem('wiki_soccer_past_records', JSON.stringify([record, ...pastRecords].slice(0, 50)));
       
+      emitStateUpdate({ currentPage: decodedTitle, globalHistory: finalHistory, winner: currentPlayer, phase: 'won' });
       return;
     }
     
@@ -174,26 +304,40 @@ export default function App() {
     // Normal move
     setCurrentPage(decodedTitle);
     setMovesMade(m => m + 1);
-    setGlobalHistory(h => [...h, { title: decodedTitle, player: currentPlayer }]);
-    setTurnHistory(h => [...h, decodedTitle]);
+    setGlobalHistory(h => {
+      const newHistory = [...h, { title: decodedTitle, player: currentPlayer }];
+      setTurnHistory(th => {
+        const newTurn = [...th, decodedTitle];
+        emitStateUpdate({ currentPage: decodedTitle, movesMade: movesMade + 1, globalHistory: newHistory, turnHistory: newTurn });
+        return newTurn;
+      });
+      return newHistory;
+    });
   };
 
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
-      if (e.data && e.data.type === 'WIKI_LINK_CLICK') {
-        handleLinkClick(e.data.title);
+      if (e.data) {
+        if (e.data.type === 'WIKI_LINK_CLICK') {
+          handleLinkClick(e.data.title);
+        } else if (e.data.type === 'WIKI_SCROLL' && isOnline && myPlayerNum === currentPlayer) {
+          socket?.emit('sync_scroll', { roomId, scrollY: e.data.scrollY });
+        }
       }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [movesMade, maxMoves, currentTarget, currentPlayer, phase]);
+  }, [movesMade, maxMoves, currentTarget, currentPlayer, phase, isOnline, myPlayerNum, socket, roomId]);
 
   const handleEndTurn = () => {
-    setCurrentPlayer(currentPlayer === 1 ? 2 : 1);
+    if (isOnline && myPlayerNum !== currentPlayer) return;
+    const nextPlayer = currentPlayer === 1 ? 2 : 1;
+    setCurrentPlayer(nextPlayer);
     setTurnCount(c => c + 1);
     setMovesMade(0);
     setTurnHistory([currentPage]);
     setTimeLeft(turnTimeLimit);
+    emitStateUpdate({ currentPlayer: nextPlayer, turnCount: turnCount + 1, movesMade: 0, turnHistory: [currentPage], timeLeft: turnTimeLimit });
   };
 
   useEffect(() => {
@@ -212,6 +356,7 @@ export default function App() {
   }, [timeLeft, phase, turnTimeLimit, currentPage, currentPlayer]);
 
   const handleUndo = () => {
+    if (isOnline && myPlayerNum !== currentPlayer) return;
     if (turnHistory.length > 1) {
       const newHistory = [...turnHistory];
       newHistory.pop(); // remove current
@@ -224,6 +369,7 @@ export default function App() {
       const newGlobal = [...globalHistory];
       newGlobal.pop();
       setGlobalHistory(newGlobal);
+      emitStateUpdate({ currentPage: previousPage, turnHistory: newHistory, movesMade: movesMade - 1, globalHistory: newGlobal });
     }
   };
 
@@ -362,6 +508,15 @@ export default function App() {
               {hasReachedConfirm ? '確認へ戻る' : '目標設定に進む'}
             </button>
 
+            <div className="pt-4 border-t border-gray-200 space-y-3">
+              <button
+                onClick={() => setPhase('online_setup')}
+                className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <Globe className="w-5 h-5"/> オンライン対戦
+              </button>
+            </div>
+
             {hasSaveData && (
               <div className="pt-4 border-t border-gray-200">
                 <button
@@ -403,6 +558,16 @@ export default function App() {
 
   if (phase === 'setup_p1' || phase === 'setup_p2') {
     const isP1 = phase === 'setup_p1';
+    const isMySetupPhase = !isOnline || (isP1 ? myPlayerNum === 1 : myPlayerNum === 2);
+
+    if (!isMySetupPhase) {
+      return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+          <div className="text-xl font-bold text-gray-600 animate-pulse">相手の設定を待っています...</div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl">
@@ -444,7 +609,7 @@ export default function App() {
                 onClick={handleNextSetup}
                 className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-xl"
               >
-                {hasReachedConfirm ? '確認へ戻る' : '次へ (Player 2 に渡す)'}
+                {hasReachedConfirm ? '確認へ戻る' : (isOnline ? '待機...' : '次へ (Player 2 に渡す)')}
               </button>
             ) : (
               <button
@@ -454,7 +619,9 @@ export default function App() {
                     return;
                   }
                   setHasReachedConfirm(true);
-                  setPhase('confirm');
+                  const nextPhase = 'confirm';
+                  setPhase(nextPhase);
+                  emitStateUpdate({ p2Target, phase: nextPhase });
                 }}
                 className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-xl"
               >
@@ -468,6 +635,71 @@ export default function App() {
               </div>
             )}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === 'online_setup') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl">
+          <div className="p-6 text-white text-center bg-purple-600 rounded-t-2xl">
+            <h1 className="text-3xl font-bold mb-2">オンライン対戦</h1>
+            <p className="text-white/90">ルームに参加または作成</p>
+          </div>
+          <div className="p-6 space-y-6">
+            <div className="space-y-3">
+              <label className="block text-sm font-bold text-gray-700">Room ID</label>
+              <input
+                type="text"
+                value={roomId}
+                onChange={e => setRoomId(e.target.value)}
+                placeholder="例: my-room-123"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-purple-600"
+              />
+            </div>
+            <button
+              onClick={joinRoom}
+              className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg transition-colors"
+            >
+              ルームに参加 / 作成
+            </button>
+            <button
+              onClick={() => setPhase('settings')}
+              className="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors"
+            >
+              戻る
+            </button>
+            {toastMessage && (
+              <div className="p-3 bg-red-100 text-red-800 rounded-lg text-sm text-center font-medium animate-in fade-in">
+                {toastMessage}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === 'online_waiting') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center space-y-6">
+          <Globe className="w-16 h-16 text-purple-600 mx-auto animate-pulse" />
+          <h1 className="text-2xl font-bold text-gray-900">対戦相手を待っています...</h1>
+          <p className="text-gray-600 font-medium">Room ID: <span className="font-bold text-purple-600">{roomId}</span></p>
+          <button
+            onClick={() => {
+              if (socket) socket.disconnect();
+              setSocket(null);
+              setIsOnline(false);
+              setPhase('settings');
+            }}
+            className="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors mt-4"
+          >
+            キャンセル
+          </button>
         </div>
       </div>
     );
@@ -561,11 +793,13 @@ export default function App() {
 
             <button
                onClick={startGame}
-               disabled={isStarting}
-               className="w-full mt-6 py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2"
+               disabled={isStarting || (isOnline && myPlayerNum === 2)}
+               className="w-full mt-6 py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
             >
                {isStarting ? (
                   <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (isOnline && myPlayerNum === 2) ? (
+                  <> Player 1の開始を待機中...</>
                 ) : (
                   <> <Play className="w-5 h-5" /> Game Start</>
                 )}

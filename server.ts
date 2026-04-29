@@ -1,10 +1,51 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
+  const httpServer = createServer(app);
+  const io = new Server(httpServer, {
+    cors: { origin: '*' }
+  });
+
+  // Socket.IO Logic
+  io.on('connection', (socket) => {
+    console.log('A user connected:', socket.id);
+
+    socket.on('join_room', (roomId: string) => {
+      const room = io.sockets.adapter.rooms.get(roomId);
+      const numClients = room ? room.size : 0;
+
+      if (numClients >= 2) {
+        socket.emit('room_full');
+        return;
+      }
+
+      socket.join(roomId);
+      const playerNum = numClients === 0 ? 1 : 2;
+      socket.emit('joined', { playerNum });
+
+      if (playerNum === 2) {
+        io.to(roomId).emit('game_ready');
+      }
+    });
+
+    socket.on('sync_state', (data) => {
+      socket.to(data.roomId).emit('sync_state', data.state);
+    });
+
+    socket.on('sync_scroll', (data) => {
+      socket.to(data.roomId).emit('sync_scroll', data);
+    });
+
+    socket.on('disconnect', () => {
+      console.log('User disconnected:', socket.id);
+    });
+  });
 
   // Wikipedia Proxy Route
   app.get('/proxy/wiki/*', async (req, res) => {
@@ -47,6 +88,22 @@ async function startServer() {
           body { background-color: #ffffff; }
         </style>
         <script>
+          // Listen for scroll syncing from parent
+          window.addEventListener('message', function(e) {
+            if (e.data.type === 'SYNC_SCROLL') {
+              window.scrollTo(0, e.data.scrollY);
+            }
+          });
+
+          // Report scrolling to parent
+          let scrollTimeout;
+          window.addEventListener('scroll', function() {
+            clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(() => {
+              window.parent.postMessage({ type: 'WIKI_SCROLL', scrollY: window.scrollY }, '*');
+            }, 50);
+          });
+
           // Intercept all link clicks
           document.addEventListener('click', function(e) {
             const a = e.target.closest('a');
@@ -131,7 +188,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
