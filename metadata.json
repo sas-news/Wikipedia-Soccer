@@ -1,0 +1,6 @@
+{
+  "name": "Wikipedia Soccer",
+  "description": "A hotseat multiplayer game where two players navigate Wikipedia pages to reach their chosen target pages. Built with React and an Express proxy for Wikipedia iframes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
