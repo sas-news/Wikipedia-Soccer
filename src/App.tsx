@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 
-type Phase = 'settings' | 'history' | 'setup_p1' | 'setup_p2' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting';
+type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting';
 
 type HistoryEntry = { title: string; player: 1 | 2 };
 
@@ -44,6 +44,7 @@ export default function App() {
   const [movesPhase1, setMovesPhase1] = useState(1);
   const [movesPhaseN, setMovesPhaseN] = useState(2);
   const [turnTimeLimit, setTurnTimeLimit] = useState<number>(0); // 0 = unlimited
+  const [moveTimeLimit, setMoveTimeLimit] = useState<number>(0); // 0 = unlimited
   
   // Setup
   const [p1Target, setP1Target] = useState('');
@@ -70,11 +71,27 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(false);
   const [roomId, setRoomId] = useState('');
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [myPlayerNum, setMyPlayerNum] = useState<1 | 2 | null>(null);
+  const [myPlayerNum, setMyPlayerNum] = useState<1 | 2 | 'spectator' | null>(null);
+  const [p1Ready, setP1Ready] = useState(false);
+  const [p2Ready, setP2Ready] = useState(false);
+  const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
+  const [isSuspended, setIsSuspended] = useState(false);
+  const [undoRequest, setUndoRequest] = useState<{fromPlayer: 1 | 2} | null>(null);
+  const [setupTargetPlayer, setSetupTargetPlayer] = useState<1 | 2 | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     setHasSaveData(!!localStorage.getItem(SAVE_KEY));
   }, [phase]);
+
+  useEffect(() => {
+    if (iframeRef.current && currentPage) {
+      const newSrc = `${window.location.origin}/proxy/wiki/${encodeURIComponent(currentPage)}`;
+      if (iframeRef.current.src !== newSrc) {
+        iframeRef.current.src = newSrc;
+      }
+    }
+  }, [currentPage]);
 
   // Online Multiplayer Socket Logic
   useEffect(() => {
@@ -95,8 +112,9 @@ export default function App() {
       setTurnHistory(state.turnHistory);
       setGlobalHistory(state.globalHistory);
       setTimeLeft(state.timeLeft);
-      setWinner(state.winner);
       setPhase(state.phase);
+      if (state.p1Ready !== undefined) setP1Ready(state.p1Ready);
+      if (state.p2Ready !== undefined) setP2Ready(state.p2Ready);
     });
 
     socket.on('sync_scroll', (data: { scrollY: number }) => {
@@ -109,9 +127,59 @@ export default function App() {
       }
     });
 
+    socket.on('sync_cursor', (data: { x: number, y: number }) => {
+      if (myPlayerNum !== currentPlayer) {
+        setCursorPos({ x: data.x, y: data.y });
+      }
+    });
+
+    socket.on('player_disconnected', (id) => {
+      showToast('相手が通信を切断しました。タイトルに戻ります。');
+      setPhase('settings');
+      if (socket) socket.disconnect();
+      setSocket(null);
+      setIsOnline(false);
+    });
+
+    socket.on('suspend', () => {
+      setIsSuspended(true);
+      showToast('相手が中断しました');
+    });
+
+    socket.on('resume', () => {
+      setIsSuspended(false);
+      showToast('相手が再開しました');
+    });
+
+    socket.on('undo_request', (data: { fromPlayer: 1 | 2 }) => {
+      setUndoRequest(data);
+    });
+
+    socket.on('undo_accept', () => {
+      executeUndo();
+      setUndoRequest(null);
+    });
+
+    socket.on('undo_deny', () => {
+      setUndoRequest(null);
+      showToast('戻るリクエストが拒否されました');
+    });
+
+    socket.on('sync_records', (records: PastGameRecord[]) => {
+      localStorage.setItem('wiki_soccer_past_records', JSON.stringify(records));
+    });
+
     return () => {
       socket.off('sync_state');
       socket.off('sync_scroll');
+      socket.off('sync_cursor');
+      socket.off('player_disconnected');
+      socket.off('suspend');
+      socket.off('resume');
+      socket.off('undo_request');
+      socket.off('undo_accept');
+      socket.off('undo_deny');
+      socket.off('sync_records');
     };
   }, [socket, myPlayerNum, currentPlayer]);
 
@@ -156,15 +224,22 @@ export default function App() {
       newSocket.disconnect();
       setSocket(null);
     });
-    newSocket.on('joined', (data: { playerNum: 1 | 2 }) => {
+    newSocket.on('joined', (data: { playerNum: 1 | 2 | 'spectator' }) => {
       setMyPlayerNum(data.playerNum);
       setIsOnline(true);
-      setPhase('online_waiting');
+      
+      if (data.playerNum === 'spectator') {
+        setPhase('online_waiting');
+        showToast('観戦者として参加しました');
+      } else {
+        setPhase('online_waiting');
+      }
       
       newSocket.on('game_ready', () => {
-        setPhase('setup_p1');
+        setPhase('setup');
+        setP1Ready(false);
+        setP2Ready(false);
         if (data.playerNum === 1) {
-          // P1 emits their initial settings to P2
           newSocket.emit('sync_state', {
             roomId,
             state: {
@@ -173,7 +248,9 @@ export default function App() {
               movesPhase1,
               movesPhaseN,
               turnTimeLimit,
-              phase: 'setup_p1'
+              phase: 'setup',
+              p1Ready: false,
+              p2Ready: false
             }
           });
         }
@@ -189,14 +266,24 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const handleNextSetup = () => {
-    if (!p1Target) {
-      showToast('目標ページを設定してください');
-      return;
+  const handleReady = (player: 1 | 2) => {
+    if (player === 1) {
+      if (!p1Target) return showToast('目標ページを設定してください');
+      setP1Ready(true);
+      emitStateUpdate({ p1Ready: true, p1Target });
+      if (p2Ready) {
+        setPhase('confirm');
+        emitStateUpdate({ phase: 'confirm' });
+      }
+    } else {
+      if (!p2Target) return showToast('目標ページを設定してください');
+      setP2Ready(true);
+      emitStateUpdate({ p2Ready: true, p2Target });
+      if (p1Ready) {
+        setPhase('confirm');
+        emitStateUpdate({ phase: 'confirm' });
+      }
     }
-    const nextPhase = hasReachedConfirm ? 'confirm' : 'setup_p2';
-    setPhase(nextPhase);
-    emitStateUpdate({ p1Target, phase: nextPhase });
   };
 
   const fetchRandomTarget = async (setTarget: (target: string) => void) => {
@@ -226,6 +313,7 @@ export default function App() {
         startPage = data.title;
       }
       
+      const initialTimeLeft = turnTimeLimit > 0 ? turnTimeLimit : moveTimeLimit;
       setCurrentPage(startPage);
       setGlobalHistory([{ title: startPage, player: 1 }]);
       setTurnHistory([startPage]);
@@ -233,7 +321,7 @@ export default function App() {
       setTurnCount(1);
       setMovesMade(0);
       setWinner(null);
-      setTimeLeft(turnTimeLimit);
+      setTimeLeft(initialTimeLeft);
       setPhase('playing');
       emitStateUpdate({
         currentPage: startPage,
@@ -243,7 +331,7 @@ export default function App() {
         turnCount: 1,
         movesMade: 0,
         winner: null,
-        timeLeft: turnTimeLimit,
+        timeLeft: initialTimeLeft,
         phase: 'playing'
       });
     } catch (e) {
@@ -255,6 +343,10 @@ export default function App() {
 
   const handleLinkClick = (rawTitle: string) => {
     if (phase !== 'playing') return;
+    if (isSuspended) {
+      showToast('中断中は操作できません');
+      return;
+    }
     if (isOnline && myPlayerNum !== currentPlayer) {
       showToast('相手のターン中です');
       return;
@@ -289,7 +381,12 @@ export default function App() {
         startPage: globalHistory[0].title
       };
       const pastRecords = JSON.parse(localStorage.getItem('wiki_soccer_past_records') || '[]');
-      localStorage.setItem('wiki_soccer_past_records', JSON.stringify([record, ...pastRecords].slice(0, 50)));
+      const newRecords = [record, ...pastRecords].slice(0, 50);
+      localStorage.setItem('wiki_soccer_past_records', JSON.stringify(newRecords));
+      
+      if (isOnline && socket && roomId) {
+        socket.emit('sync_record', { roomId, record });
+      }
       
       emitStateUpdate({ currentPage: decodedTitle, globalHistory: finalHistory, winner: currentPlayer, phase: 'won' });
       return;
@@ -304,11 +401,14 @@ export default function App() {
     // Normal move
     setCurrentPage(decodedTitle);
     setMovesMade(m => m + 1);
+    if (moveTimeLimit > 0) {
+      setTimeLeft(moveTimeLimit);
+    }
     setGlobalHistory(h => {
       const newHistory = [...h, { title: decodedTitle, player: currentPlayer }];
       setTurnHistory(th => {
         const newTurn = [...th, decodedTitle];
-        emitStateUpdate({ currentPage: decodedTitle, movesMade: movesMade + 1, globalHistory: newHistory, turnHistory: newTurn });
+        emitStateUpdate({ currentPage: decodedTitle, movesMade: movesMade + 1, globalHistory: newHistory, turnHistory: newTurn, timeLeft: moveTimeLimit > 0 ? moveTimeLimit : timeLeft });
         return newTurn;
       });
       return newHistory;
@@ -322,6 +422,14 @@ export default function App() {
           handleLinkClick(e.data.title);
         } else if (e.data.type === 'WIKI_SCROLL' && isOnline && myPlayerNum === currentPlayer) {
           socket?.emit('sync_scroll', { roomId, scrollY: e.data.scrollY });
+        } else if (e.data.type === 'WIKI_CURSOR' && isOnline && myPlayerNum === currentPlayer) {
+          socket?.emit('sync_cursor', { roomId, x: e.data.x, y: e.data.y });
+        } else if (e.data.type === 'RANDOM_LINK_RESULT') {
+          if (e.data.title) {
+            handleLinkClick(e.data.title);
+          } else {
+            handleEndTurn();
+          }
         }
       }
     };
@@ -331,20 +439,36 @@ export default function App() {
 
   const handleEndTurn = () => {
     if (isOnline && myPlayerNum !== currentPlayer) return;
+    if (isSuspended) return;
     const nextPlayer = currentPlayer === 1 ? 2 : 1;
+    const newTimeLeft = turnTimeLimit > 0 ? turnTimeLimit : moveTimeLimit;
     setCurrentPlayer(nextPlayer);
     setTurnCount(c => c + 1);
     setMovesMade(0);
     setTurnHistory([currentPage]);
-    setTimeLeft(turnTimeLimit);
-    emitStateUpdate({ currentPlayer: nextPlayer, turnCount: turnCount + 1, movesMade: 0, turnHistory: [currentPage], timeLeft: turnTimeLimit });
+    setTimeLeft(newTimeLeft);
+    emitStateUpdate({ currentPlayer: nextPlayer, turnCount: turnCount + 1, movesMade: 0, turnHistory: [currentPage], timeLeft: newTimeLeft });
   };
 
   useEffect(() => {
-    if (phase !== 'playing' || turnTimeLimit === 0) return;
+    if (phase !== 'playing' || isSuspended) return;
+    
+    const limit = turnTimeLimit > 0 ? turnTimeLimit : moveTimeLimit;
+    if (limit === 0) return;
     
     if (timeLeft <= 0) {
-      handleEndTurn();
+      if (turnTimeLimit > 0) {
+        handleEndTurn();
+      } else if (moveTimeLimit > 0) {
+        if (movesMade >= maxMoves) {
+          handleEndTurn();
+        } else {
+          const iframe = iframeRef.current;
+          if (iframe && iframe.contentWindow) {
+            iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK' }, '*');
+          }
+        }
+      }
       return;
     }
     
@@ -353,10 +477,9 @@ export default function App() {
     }, 1000);
     
     return () => clearTimeout(timerId);
-  }, [timeLeft, phase, turnTimeLimit, currentPage, currentPlayer]);
+  }, [timeLeft, phase, turnTimeLimit, moveTimeLimit, currentPage, currentPlayer, isSuspended, movesMade, maxMoves]);
 
-  const handleUndo = () => {
-    if (isOnline && myPlayerNum !== currentPlayer) return;
+  const executeUndo = () => {
     if (turnHistory.length > 1) {
       const newHistory = [...turnHistory];
       newHistory.pop(); // remove current
@@ -370,6 +493,35 @@ export default function App() {
       newGlobal.pop();
       setGlobalHistory(newGlobal);
       emitStateUpdate({ currentPage: previousPage, turnHistory: newHistory, movesMade: movesMade - 1, globalHistory: newGlobal });
+    }
+  };
+
+  const handleUndo = () => {
+    if (isOnline && myPlayerNum !== currentPlayer) return;
+    if (isSuspended) return;
+    if (turnHistory.length <= 1) return;
+    
+    if (isOnline) {
+      socket?.emit('undo_request', { roomId, fromPlayer: myPlayerNum });
+      showToast('相手に「戻る」をリクエストしました...');
+    } else {
+      executeUndo();
+    }
+  };
+
+  const handleSuspend = () => {
+    if (isOnline) {
+      setIsSuspended(true);
+      socket?.emit('suspend', { roomId });
+      showToast('ゲームを中断しました（相手は待機中です）');
+    }
+  };
+
+  const handleResume = () => {
+    if (isOnline) {
+      setIsSuspended(false);
+      socket?.emit('resume', { roomId });
+      showToast('ゲームを再開しました');
     }
   };
 
@@ -393,6 +545,12 @@ export default function App() {
     };
     localStorage.setItem(SAVE_KEY, JSON.stringify(stateToSave));
     setHasSaveData(true);
+    if (isOnline) {
+      socket?.emit('player_disconnected', { roomId });
+      socket?.disconnect();
+      setSocket(null);
+      setIsOnline(false);
+    }
     setPhase('settings');
     showToast('ゲームを保存して中断しました');
   };
@@ -484,7 +642,11 @@ export default function App() {
               <label className="block text-sm font-bold text-gray-700">ターン制限時間</label>
               <select 
                 value={turnTimeLimit} 
-                onChange={(e) => setTurnTimeLimit(Number(e.target.value))}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setTurnTimeLimit(val);
+                  if (val > 0) setMoveTimeLimit(0);
+                }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-900 bg-white"
               >
                 <option value={0}>無制限 (なし)</option>
@@ -495,27 +657,53 @@ export default function App() {
               </select>
             </div>
 
-            <button
-              onClick={() => {
-                if (startPageMode === 'custom' && !customStartPage) {
-                  showToast('スタートページを指定してください');
-                  return;
-                }
-                setPhase(hasReachedConfirm ? 'confirm' : 'setup_p1');
-              }}
+            <div className="space-y-3">
+              <label className="block text-sm font-bold text-gray-700">1移動制限時間</label>
+              <select 
+                value={moveTimeLimit} 
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setMoveTimeLimit(val);
+                  if (val > 0) setTurnTimeLimit(0);
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-900 bg-white"
+              >
+                <option value={0}>無制限 (なし)</option>
+                <option value={10}>10秒</option>
+                <option value={15}>15秒</option>
+                <option value={20}>20秒</option>
+                <option value={30}>30秒</option>
+              </select>
+              <p className="text-xs text-gray-500">時間切れでランダムなリンクに自動移動します</p>
+            </div>
+
+              <button
+                onClick={() => {
+                  if (startPageMode === 'custom' && !customStartPage) {
+                    showToast('スタートページを指定してください');
+                    return;
+                  }
+                  if (p1Ready && p2Ready) {
+                    setPhase('confirm');
+                  } else {
+                    setPhase('setup');
+                  }
+                }}
               className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg transition-colors"
             >
-              {hasReachedConfirm ? '確認へ戻る' : '目標設定に進む'}
+              {p1Ready && p2Ready ? '保存して戻る' : '目標設定に進む'}
             </button>
 
-            <div className="pt-4 border-t border-gray-200 space-y-3">
-              <button
-                onClick={() => setPhase('online_setup')}
-                className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2"
-              >
-                <Globe className="w-5 h-5"/> オンライン対戦
-              </button>
-            </div>
+            {!isOnline && (
+              <div className="pt-4 border-t border-gray-200 space-y-3">
+                <button
+                  onClick={() => setPhase('online_setup')}
+                  className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  <Globe className="w-5 h-5"/> オンライン対戦
+                </button>
+              </div>
+            )}
 
             {hasSaveData && (
               <div className="pt-4 border-t border-gray-200">
@@ -556,84 +744,152 @@ export default function App() {
     );
   }
 
-  if (phase === 'setup_p1' || phase === 'setup_p2') {
-    const isP1 = phase === 'setup_p1';
-    const isMySetupPhase = !isOnline || (isP1 ? myPlayerNum === 1 : myPlayerNum === 2);
-
-    if (!isMySetupPhase) {
+  if (phase === 'setup') {
+    if (isOnline && myPlayerNum === 'spectator') {
       return (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-          <div className="text-xl font-bold text-gray-600 animate-pulse">相手の設定を待っています...</div>
+          <div className="text-xl font-bold text-gray-600 animate-pulse">プレイヤーの設定を待っています...</div>
         </div>
       );
     }
 
+    const isP1 = !isOnline || myPlayerNum === 1;
+    const isP2 = !isOnline || myPlayerNum === 2;
+    const showLocalTabs = !isOnline;
+
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl">
-          <div className={`p-6 text-white text-center rounded-t-2xl ${isP1 ? 'bg-red-600' : 'bg-blue-600'}`}>
+          <div className="p-6 text-white text-center bg-gray-900 rounded-t-2xl">
             <h1 className="text-3xl font-bold mb-2">Wikipedia Soccer</h1>
-            <p className="text-white/90">
-              Player {isP1 ? '1 (先攻)' : '2 (後攻)'} の目標設定
-            </p>
+            <p className="text-white/90">目標ページの設定</p>
           </div>
           
           <div className="p-6 space-y-6">
             <div className="bg-orange-50 text-orange-800 p-4 rounded-xl text-sm font-medium border border-orange-200">
               <AlertCircle className="w-5 h-5 mb-2 inline-block mr-1" />
-              対戦相手には画面を見せないでください！
+              対戦相手には画面が見えないようにしてください！
             </div>
 
-            <div className={`p-4 rounded-xl border ${isP1 ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100'}`}>
-              <div className="flex justify-between items-center mb-1">
-                <label className={`block text-sm font-bold ${isP1 ? 'text-red-700' : 'text-blue-700'}`}>
-                  あなたの目標ページ
-                </label>
+            {showLocalTabs && (
+              <div className="flex gap-2">
                 <button
-                  onClick={() => fetchRandomTarget(isP1 ? setP1Target : setP2Target)}
-                  className={`flex items-center gap-1 text-xs font-bold px-2 py-1 rounded transition-colors ${isP1 ? 'bg-red-100 hover:bg-red-200 text-red-700' : 'bg-blue-100 hover:bg-blue-200 text-blue-700'}`}
-                  title="ランダムな記事を設定"
+                  onClick={() => setSetupTargetPlayer(prev => prev === 1 ? null : 1)}
+                  className={`flex-1 py-2 rounded-lg font-bold text-sm ${setupTargetPlayer === 1 ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600'}`}
                 >
-                  <Dices className="w-3 h-3" /> ランダム
+                  {setupTargetPlayer === 1 ? 'Player 1 を閉じる' : 'Player 1 を設定'}
+                </button>
+                <button
+                  onClick={() => setSetupTargetPlayer(prev => prev === 2 ? null : 2)}
+                  className={`flex-1 py-2 rounded-lg font-bold text-sm ${setupTargetPlayer === 2 ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+                >
+                  {setupTargetPlayer === 2 ? 'Player 2 を閉じる' : 'Player 2 を設定'}
                 </button>
               </div>
-              <WikiAutocomplete 
-                value={isP1 ? p1Target : p2Target} 
-                onChange={isP1 ? setP1Target : setP2Target} 
-                placeholder="例: 織田信長" 
-              />
-            </div>
-            
-            {isP1 ? (
-              <button
-                onClick={handleNextSetup}
-                className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-xl"
-              >
-                {hasReachedConfirm ? '確認へ戻る' : (isOnline ? '待機...' : '次へ (Player 2 に渡す)')}
-              </button>
-            ) : (
-              <button
-                onClick={() => {
-                  if (!p2Target) {
-                    showToast('目標ページを設定してください');
-                    return;
-                  }
-                  setHasReachedConfirm(true);
-                  const nextPhase = 'confirm';
-                  setPhase(nextPhase);
-                  emitStateUpdate({ p2Target, phase: nextPhase });
-                }}
-                className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-xl"
-              >
-                最終確認に進む
-              </button>
             )}
-            
-            {toastMessage && (
-              <div className="p-3 bg-red-100 text-red-800 rounded-lg text-sm text-center font-medium animate-in fade-in">
-                {toastMessage}
+
+            {isP1 && (!showLocalTabs || setupTargetPlayer === 1) && (
+              <div className={`p-4 rounded-xl border ${p1Ready ? 'bg-gray-100 border-gray-200 opacity-70' : 'bg-red-50 border-red-100'}`}>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-sm font-bold text-red-700">
+                    Player 1 の目標
+                  </label>
+                  {!p1Ready && (
+                    <button
+                      onClick={() => fetchRandomTarget(setP1Target)}
+                      className="flex items-center gap-1 text-xs font-bold px-2 py-1 rounded transition-colors bg-red-100 hover:bg-red-200 text-red-700"
+                    >
+                      <Dices className="w-3 h-3" /> ランダム
+                    </button>
+                  )}
+                </div>
+                {p1Ready ? (
+                  <div className="space-y-2">
+                    <div className="py-3 px-3 font-medium text-gray-700 bg-white rounded border">
+                      {p1Target} (準備完了)
+                    </div>
+                    <button
+                      onClick={() => {
+                        setP1Ready(false);
+                        emitStateUpdate({ p1Ready: false });
+                      }}
+                      className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-lg text-sm transition-colors"
+                    >
+                      編集に戻る
+                    </button>
+                  </div>
+                ) : (
+                  <WikiAutocomplete 
+                    value={p1Target} 
+                    onChange={setP1Target} 
+                    placeholder="例: 織田信長" 
+                  />
+                )}
+                {!p1Ready && (
+                  <button
+                    onClick={() => handleReady(1)}
+                    className="w-full mt-3 py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg"
+                  >
+                    設定完了
+                  </button>
+                )}
               </div>
             )}
+
+            {isP2 && (!showLocalTabs || setupTargetPlayer === 2) && (
+              <div className={`p-4 rounded-xl border ${p2Ready ? 'bg-gray-100 border-gray-200 opacity-70' : 'bg-blue-50 border-blue-100'}`}>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-sm font-bold text-blue-700">
+                    Player 2 の目標
+                  </label>
+                  {!p2Ready && (
+                    <button
+                      onClick={() => fetchRandomTarget(setP2Target)}
+                      className="flex items-center gap-1 text-xs font-bold px-2 py-1 rounded transition-colors bg-blue-100 hover:bg-blue-200 text-blue-700"
+                    >
+                      <Dices className="w-3 h-3" /> ランダム
+                    </button>
+                  )}
+                </div>
+                {p2Ready ? (
+                  <div className="space-y-2">
+                    <div className="py-3 px-3 font-medium text-gray-700 bg-white rounded border">
+                      {p2Target} (準備完了)
+                    </div>
+                    <button
+                      onClick={() => {
+                        setP2Ready(false);
+                        emitStateUpdate({ p2Ready: false });
+                      }}
+                      className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-lg text-sm transition-colors"
+                    >
+                      編集に戻る
+                    </button>
+                  </div>
+                ) : (
+                  <WikiAutocomplete 
+                    value={p2Target} 
+                    onChange={setP2Target} 
+                    placeholder="例: 織田信長" 
+                  />
+                )}
+                {!p2Ready && (
+                  <button
+                    onClick={() => handleReady(2)}
+                    className="w-full mt-3 py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg"
+                  >
+                    設定完了
+                  </button>
+                )}
+              </div>
+            )}
+
+            {isOnline && (myPlayerNum === 1 ? p1Ready && !p2Ready : p2Ready && !p1Ready) && (
+              <div className="text-center font-bold text-gray-500 animate-pulse py-2">
+                相手の準備を待っています...
+              </div>
+            )}
+
           </div>
         </div>
       </div>
@@ -783,11 +1039,11 @@ export default function App() {
             <div className="space-y-3">
               <div className="p-4 bg-red-50 border border-red-100 rounded-xl flex justify-between items-center">
                 <span className="font-bold text-red-700">Player 1 の目標:</span>
-                <HiddenTargetItem target={p1Target} />
+                {(myPlayerNum === 1 || myPlayerNum === 'spectator' || !isOnline) ? <HiddenTargetItem target={p1Target} /> : <span className="font-bold text-gray-400">????????</span>}
               </div>
               <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl flex justify-between items-center">
                 <span className="font-bold text-blue-700">Player 2 の目標:</span>
-                <HiddenTargetItem target={p2Target} />
+                {(myPlayerNum === 2 || myPlayerNum === 'spectator' || !isOnline) ? <HiddenTargetItem target={p2Target} /> : <span className="font-bold text-gray-400">????????</span>}
               </div>
             </div>
 
@@ -809,19 +1065,28 @@ export default function App() {
                  onClick={() => setPhase('settings')}
                  className="flex-1 py-3 text-gray-600 hover:text-gray-800 text-xs font-bold transition-colors bg-gray-100 hover:bg-gray-200 rounded-xl"
               >
-                 全体設定
+                 全設定
               </button>
               <button
-                 onClick={() => setPhase('setup_p1')}
-                 className="flex-1 py-3 text-red-600 hover:text-red-800 text-xs font-bold transition-colors bg-red-50 hover:bg-red-100 rounded-xl border border-red-100"
+                 onClick={() => {
+                   if (isOnline) {
+                     if (myPlayerNum === 1) setP1Ready(false);
+                     if (myPlayerNum === 2) setP2Ready(false);
+                     setPhase('setup');
+                     emitStateUpdate({
+                       p1Ready: myPlayerNum === 1 ? false : p1Ready,
+                       p2Ready: myPlayerNum === 2 ? false : p2Ready,
+                       phase: 'setup'
+                     });
+                   } else {
+                     setP1Ready(false);
+                     setP2Ready(false);
+                     setPhase('setup');
+                   }
+                 }}
+                 className="flex-1 py-3 text-indigo-600 hover:text-indigo-800 text-xs font-bold transition-colors bg-indigo-50 hover:bg-indigo-100 rounded-xl border border-indigo-100"
               >
-                 P1目標
-              </button>
-              <button
-                 onClick={() => setPhase('setup_p2')}
-                 className="flex-1 py-3 text-blue-600 hover:text-blue-800 text-xs font-bold transition-colors bg-blue-50 hover:bg-blue-100 rounded-xl border border-blue-100"
-              >
-                 P2目標
+                 目標再設定
               </button>
             </div>
           </div>
@@ -832,9 +1097,26 @@ export default function App() {
 
   const isP1 = currentPlayer === 1;
   const targetDisplay = showTarget ? currentTarget : '目を離して確認 →';
+  const isMyTurn = !isOnline || myPlayerNum === currentPlayer;
+  const isSpectator = myPlayerNum === 'spectator';
   
   return (
     <div className="h-screen w-full flex flex-col bg-slate-100 overflow-hidden relative">
+      {!isMyTurn && !isSpectator && isOnline && phase === 'playing' && (
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white px-6 py-1 rounded-b-xl shadow-lg font-bold text-sm animate-pulse">
+          Player {currentPlayer} のターン
+        </div>
+      )}
+      {isMyTurn && isOnline && phase === 'playing' && (
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-6 py-1 rounded-b-xl shadow-lg font-bold text-sm animate-pulse">
+          あなたのターンです！
+        </div>
+      )}
+      {isSpectator && isOnline && phase === 'playing' && (
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 z-50 bg-purple-600 text-white px-6 py-1 rounded-b-xl shadow-lg font-bold text-sm">
+          観戦中 - Player {currentPlayer}のターン
+        </div>
+      )}
       <div className="flex-none bg-white border-b shadow-sm z-10 w-full relative">
         <div className="absolute top-0 left-0 w-full h-1 bg-gray-200">
           <div 
@@ -854,54 +1136,95 @@ export default function App() {
               <span className="text-sm font-bold text-gray-700 ml-2">
                 移動: {movesMade} / {maxMoves}
               </span>
-              {turnTimeLimit > 0 && (
+              {(turnTimeLimit > 0 || moveTimeLimit > 0) && (
                 <span className={`text-sm font-bold ml-2 flex items-center gap-1 ${timeLeft <= 5 ? 'text-red-600 animate-pulse' : 'text-gray-700'}`}>
-                  残り時間: {timeLeft}秒
+                  {moveTimeLimit > 0 ? '移動時間' : '残り時間'}: {timeLeft}秒
                 </span>
               )}
             </div>
             <div className="text-lg font-bold text-gray-900 flex items-center gap-2 mt-2">
-              <button 
-                onMouseDown={() => setShowTarget(true)}
-                onMouseUp={() => setShowTarget(false)}
-                onMouseLeave={() => setShowTarget(false)}
-                onTouchStart={() => setShowTarget(true)}
-                onTouchEnd={() => setShowTarget(false)}
-                className="flex items-center gap-1.5 text-xs bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded text-gray-600 transition-colors select-none"
-              >
-                {showTarget ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                {showTarget ? '非表示' : '目標確認'}
-              </button>
-              <span className={`text-sm transition-colors ${showTarget ? 'text-blue-800' : 'text-gray-400 select-none tracking-widest'}`}>
-                {showTarget ? currentTarget : '••••••••'}
-              </span>
+              {(isMyTurn || isSpectator || !isOnline) ? (
+                <>
+                  <button 
+                    onMouseDown={() => setShowTarget(true)}
+                    onMouseUp={() => setShowTarget(false)}
+                    onMouseLeave={() => setShowTarget(false)}
+                    onTouchStart={() => setShowTarget(true)}
+                    onTouchEnd={() => setShowTarget(false)}
+                    className="flex items-center gap-1.5 text-xs bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded text-gray-600 transition-colors select-none"
+                  >
+                    {showTarget ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                    {showTarget ? '表示中' : '目標確認'}
+                  </button>
+                  <span className={`text-sm transition-colors ${showTarget ? 'text-blue-800' : 'text-gray-400 select-none tracking-widest'}`}>
+                    {showTarget ? currentTarget : '????????'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <button className="flex items-center gap-1.5 text-xs bg-gray-100 px-2 py-1 rounded text-gray-400 cursor-not-allowed select-none">
+                    <EyeOff className="w-3 h-3" />
+                    相手の目標は秘密です
+                  </button>
+                  <span className="text-sm text-gray-400 select-none tracking-widest">
+                    ????????
+                  </span>
+                </>
+              )}
             </div>
           </div>
           
           <div className="flex items-center gap-2 w-full sm:w-auto justify-center">
-            <button
-              onClick={handleSaveAndQuit}
-              className="px-3 py-2 flex items-center gap-1.5 text-sm font-medium border border-gray-200 rounded-lg bg-white hover:bg-gray-50 transition-colors text-gray-700"
-              title="中断してトップに戻る"
-            >
-              <Save className="w-4 h-4" /> <span className="hidden sm:inline">中断</span>
-            </button>
-            <button
-              onClick={handleUndo}
-              disabled={movesMade === 0}
-              className="px-4 py-2 flex items-center gap-1.5 text-sm font-medium border border-gray-200 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white transition-colors"
-            >
-              <RotateCcw className="w-4 h-4" /> 戻る
-            </button>
-            {movesMade >= maxMoves && (
-              <button
-                onClick={handleEndTurn}
-                className={`px-5 py-2 flex items-center gap-1.5 text-sm font-bold rounded-lg transition-transform animate-in fade-in zoom-in-95 shadow-sm
-                  ${isP1 ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}
-                `}
-              >
-                ターン交代 <ArrowRight className="w-4 h-4" />
-              </button>
+            {!isSpectator && (
+              <>
+                {isOnline ? (
+                  isSuspended ? (
+                    <button
+                      onClick={handleResume}
+                      className="px-3 py-2 flex items-center gap-1.5 text-sm font-medium border border-green-200 rounded-lg bg-green-50 hover:bg-green-100 transition-colors text-green-700"
+                    >
+                      <Play className="w-4 h-4" /> <span className="hidden sm:inline">再開</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleSuspend}
+                      className="px-3 py-2 flex items-center gap-1.5 text-sm font-medium border border-gray-200 rounded-lg bg-white hover:bg-gray-50 transition-colors text-gray-700"
+                      title="ゲームを一時中断"
+                    >
+                      <Save className="w-4 h-4" /> <span className="hidden sm:inline">中断</span>
+                    </button>
+                  )
+                ) : (
+                  <button
+                    onClick={handleSaveAndQuit}
+                    className="px-3 py-2 flex items-center gap-1.5 text-sm font-medium border border-gray-200 rounded-lg bg-white hover:bg-gray-50 transition-colors text-gray-700"
+                    title="中断してトップに戻る"
+                  >
+                    <Save className="w-4 h-4" /> <span className="hidden sm:inline">中断</span>
+                  </button>
+                )}
+              </>
+            )}
+            {isMyTurn && !isSuspended && (
+              <>
+                <button
+                  onClick={handleUndo}
+                  disabled={movesMade === 0}
+                  className="px-4 py-2 flex items-center gap-1.5 text-sm font-medium border border-gray-200 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white transition-colors"
+                >
+                  <RotateCcw className="w-4 h-4" /> 戻る
+                </button>
+                {movesMade >= maxMoves && (
+                  <button
+                    onClick={handleEndTurn}
+                    className={`px-5 py-2 flex items-center gap-1.5 text-sm font-bold rounded-lg transition-transform animate-in fade-in zoom-in-95 shadow-sm
+                      ${isP1 ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}
+                    `}
+                  >
+                    ターン終了 <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
+              </>
             )}
           </div>
 
@@ -917,6 +1240,59 @@ export default function App() {
         </div>
       )}
 
+      {isSuspended && (
+        <div className="absolute inset-0 z-40 bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 text-center space-y-4 max-w-sm mx-4">
+            <div className="mx-auto w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center">
+              <Save className="w-8 h-8 text-yellow-600" />
+            </div>
+            <h2 className="text-xl font-bold text-gray-900">ゲームが中断されています</h2>
+            <p className="text-gray-600">相手の再開を待っています...</p>
+            {isOnline && myPlayerNum !== 'spectator' && (
+              <button
+                onClick={handleResume}
+                className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg"
+              >
+                自分で再開する
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {undoRequest && undoRequest.fromPlayer !== myPlayerNum && (
+        <div className="absolute inset-0 z-40 bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 text-center space-y-4 max-w-sm mx-4">
+            <div className="mx-auto w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center">
+              <RotateCcw className="w-8 h-8 text-blue-600" />
+            </div>
+            <h2 className="text-xl font-bold text-gray-900">Player {undoRequest.fromPlayer} が「戻る」をリクエストしています</h2>
+            <p className="text-gray-600">1つ前のページに戻りますか？</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  socket?.emit('undo_deny', { roomId });
+                  setUndoRequest(null);
+                }}
+                className="flex-1 py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-lg"
+              >
+                拒否
+              </button>
+              <button
+                onClick={() => {
+                  socket?.emit('undo_accept', { roomId });
+                  executeUndo();
+                  setUndoRequest(null);
+                }}
+                className="flex-1 py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg"
+              >
+                許可
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Won View Overlay */}
       {phase === 'won' && (
         <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -925,8 +1301,11 @@ export default function App() {
               <Trophy className="w-10 h-10 text-yellow-600" />
             </div>
             <h1 className="text-4xl font-bold text-gray-900">
-              Player {winner} Wins!
+              {isSpectator ? `Player ${winner} の勝利！` : (myPlayerNum === winner || !isOnline ? (winner === 1 ? 'Player 1 Wins!' : 'Player 2 Wins!') : 'You Lose...')}
             </h1>
+            {isOnline && !isSpectator && myPlayerNum === winner && (
+              <p className="text-xl font-bold text-green-600">You Win!</p>
+            )}
             <p className="text-gray-600 font-medium">
               目標「{winner === 1 ? p1Target : p2Target}」に到達しました！
             </p>
@@ -967,24 +1346,39 @@ export default function App() {
             
             <button
               onClick={() => {
-                setPhase('settings');
-                setP1Target('');
-                setP2Target('');
-                setHasReachedConfirm(false);
+                if (isOnline) {
+                   setP1Target('');
+                   setP2Target('');
+                   setP1Ready(false);
+                   setP2Ready(false);
+                   setPhase('setup');
+                   emitStateUpdate({ p1Target: '', p2Target: '', phase: 'setup', p1Ready: false, p2Ready: false });
+                } else {
+                   setPhase('settings');
+                   setP1Target('');
+                   setP2Target('');
+                   setHasReachedConfirm(false);
+                }
               }}
               className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-xl transition-colors"
             >
-              最初から遊ぶ
+              {isOnline ? 'もう一度遊ぶ（再戦）' : '最初から遊ぶ'}
             </button>
           </div>
         </div>
       )}
 
       <div className="flex-1 w-full bg-white relative">
+        {!isMyTurn && isOnline && cursorPos && (
+          <div
+            className="absolute w-4 h-4 bg-red-500 rounded-full z-50 pointer-events-none opacity-60 transform -translate-x-1/2 -translate-y-1/2 transition-all duration-75 shadow-md border-2 border-white"
+            style={{ left: `${cursorPos.x * 100}%`, top: `${cursorPos.y * 100}%` }}
+          />
+        )}
         <iframe 
-          key={currentPage}
+          ref={iframeRef}
           title="Wikipedia"
-          src={`/proxy/wiki/${encodeURIComponent(currentPage)}`}
+          src={currentPage ? `/proxy/wiki/${encodeURIComponent(currentPage)}` : ''}
           className="w-full h-full border-0 absolute inset-0"
         />
       </div>

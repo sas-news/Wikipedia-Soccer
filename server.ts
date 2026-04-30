@@ -6,11 +6,14 @@ import { Server } from 'socket.io';
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = 3011;
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: { origin: '*' }
   });
+
+  const roomStates = new Map<string, any>();
+  const roomRecords = new Map<string, any[]>();
 
   // Socket.IO Logic
   io.on('connection', (socket) => {
@@ -20,26 +23,81 @@ async function startServer() {
       const room = io.sockets.adapter.rooms.get(roomId);
       const numClients = room ? room.size : 0;
 
-      if (numClients >= 2) {
-        socket.emit('room_full');
-        return;
-      }
-
       socket.join(roomId);
-      const playerNum = numClients === 0 ? 1 : 2;
+      let playerNum: number | 'spectator';
+      
+      if (numClients === 0) {
+        playerNum = 1;
+      } else if (numClients === 1) {
+        playerNum = 2;
+      } else {
+        playerNum = 'spectator';
+      }
+      
       socket.emit('joined', { playerNum });
 
-      if (playerNum === 2) {
+      if (numClients === 1) { // 2nd player joined
         io.to(roomId).emit('game_ready');
+      }
+      
+      if (roomStates.has(roomId)) {
+        socket.emit('sync_state', roomStates.get(roomId));
+      }
+      if (roomRecords.has(roomId)) {
+        socket.emit('sync_records', roomRecords.get(roomId));
       }
     });
 
     socket.on('sync_state', (data) => {
+      roomStates.set(data.roomId, data.state);
       socket.to(data.roomId).emit('sync_state', data.state);
     });
 
     socket.on('sync_scroll', (data) => {
       socket.to(data.roomId).emit('sync_scroll', data);
+    });
+
+    socket.on('sync_cursor', (data) => {
+      socket.to(data.roomId).emit('sync_cursor', data);
+    });
+
+    socket.on('suspend', (data) => {
+      socket.to(data.roomId).emit('suspend');
+    });
+
+    socket.on('resume', (data) => {
+      socket.to(data.roomId).emit('resume');
+    });
+
+    socket.on('undo_request', (data) => {
+      socket.to(data.roomId).emit('undo_request', { fromPlayer: data.fromPlayer });
+    });
+
+    socket.on('undo_accept', (data) => {
+      socket.to(data.roomId).emit('undo_accept');
+    });
+
+    socket.on('undo_deny', (data) => {
+      socket.to(data.roomId).emit('undo_deny');
+    });
+
+    socket.on('sync_record', (data) => {
+      const records = roomRecords.get(data.roomId) || [];
+      records.unshift(data.record);
+      roomRecords.set(data.roomId, records.slice(0, 50));
+      io.to(data.roomId).emit('sync_records', records);
+    });
+
+    socket.on('disconnecting', () => {
+      socket.rooms.forEach((roomId) => {
+        if (roomId !== socket.id) {
+          io.to(roomId).emit('player_disconnected', socket.id);
+          const room = io.sockets.adapter.rooms.get(roomId);
+          if (room && room.size <= 1) {
+            roomStates.delete(roomId);
+          }
+        }
+      });
     });
 
     socket.on('disconnect', () => {
@@ -89,19 +147,30 @@ async function startServer() {
         </style>
         <script>
           // Listen for scroll syncing from parent
+          let isSyncingScroll = false;
+          let syncScrollTimeout;
           window.addEventListener('message', function(e) {
             if (e.data.type === 'SYNC_SCROLL') {
-              window.scrollTo(0, e.data.scrollY);
+              isSyncingScroll = true;
+              window.scrollTo({ top: e.data.scrollY, behavior: 'smooth' });
+              clearTimeout(syncScrollTimeout);
+              syncScrollTimeout = setTimeout(() => {
+                isSyncingScroll = false;
+              }, 250);
             }
           });
 
           // Report scrolling to parent
-          let scrollTimeout;
+          let ticking = false;
           window.addEventListener('scroll', function() {
-            clearTimeout(scrollTimeout);
-            scrollTimeout = setTimeout(() => {
-              window.parent.postMessage({ type: 'WIKI_SCROLL', scrollY: window.scrollY }, '*');
-            }, 50);
+            if (isSyncingScroll) return;
+            if (!ticking) {
+              window.requestAnimationFrame(function() {
+                window.parent.postMessage({ type: 'WIKI_SCROLL', scrollY: window.scrollY }, '*');
+                ticking = false;
+              });
+              ticking = true;
+            }
           });
 
           // Intercept all link clicks
@@ -141,6 +210,47 @@ async function startServer() {
               }
             } catch(err) {
               console.error(err);
+            }
+          });
+
+          // Report cursor position
+          let cursorTicking = false;
+          function sendCursor(x, y) {
+            if (!cursorTicking) {
+              window.requestAnimationFrame(function() {
+                window.parent.postMessage({
+                  type: 'WIKI_CURSOR',
+                  x: x / window.innerWidth,
+                  y: y / window.innerHeight
+                }, '*');
+                cursorTicking = false;
+              });
+              cursorTicking = true;
+            }
+          }
+          window.addEventListener('mousemove', function(e) {
+            sendCursor(e.clientX, e.clientY);
+          });
+          window.addEventListener('touchmove', function(e) {
+            if (e.touches.length > 0) {
+              sendCursor(e.touches[0].clientX, e.touches[0].clientY);
+            }
+          });
+
+          window.addEventListener('message', function(e) {
+            if (e.data.type === 'GET_RANDOM_LINK') {
+              const links = Array.from(document.querySelectorAll('a[href^="/wiki/"]'));
+              const validLinks = links.filter(function(a) {
+                const href = a.getAttribute('href');
+                return href && !href.includes(':');
+              });
+              if (validLinks.length > 0) {
+                const randomLink = validLinks[Math.floor(Math.random() * validLinks.length)];
+                const title = randomLink.getAttribute('href').replace('/wiki/', '');
+                window.parent.postMessage({ type: 'RANDOM_LINK_RESULT', title: title }, '*');
+              } else {
+                window.parent.postMessage({ type: 'RANDOM_LINK_RESULT', title: null }, '*');
+              }
             }
           });
         </script>
