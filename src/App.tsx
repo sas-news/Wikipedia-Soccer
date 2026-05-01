@@ -79,13 +79,14 @@ export default function App() {
   const [isSuspended, setIsSuspended] = useState(false);
   const [undoRequest, setUndoRequest] = useState<{fromPlayer: 1 | 2} | null>(null);
   const [setupTargetPlayer, setSetupTargetPlayer] = useState<1 | 2 | null>(null);
+  const [navCounter, setNavCounter] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     setHasSaveData(!!localStorage.getItem(SAVE_KEY));
   }, [phase]);
 
-  const iframeKey = `${currentPage}-${globalHistory.length}`;
+  const iframeKey = `${currentPage}-${globalHistory.length}-${navCounter}`;
 
   // Online Multiplayer Socket Logic
   useEffect(() => {
@@ -98,8 +99,8 @@ export default function App() {
       if (state.movesPhaseN !== undefined) setMovesPhaseN(state.movesPhaseN);
       if (state.turnTimeLimit !== undefined) setTurnTimeLimit(state.turnTimeLimit);
       if (state.moveTimeLimit !== undefined) setMoveTimeLimit(state.moveTimeLimit);
-      if (state.p1Target !== undefined) setP1Target(state.p1Target);
-      if (state.p2Target !== undefined) setP2Target(state.p2Target);
+      if (state.p1Target !== undefined && myPlayerNum !== 1) setP1Target(state.p1Target);
+      if (state.p2Target !== undefined && myPlayerNum !== 2) setP2Target(state.p2Target);
       if (state.currentPlayer !== undefined) setCurrentPlayer(state.currentPlayer);
       if (state.turnCount !== undefined) setTurnCount(state.turnCount);
       if (state.movesMade !== undefined) setMovesMade(state.movesMade);
@@ -183,26 +184,7 @@ export default function App() {
     if (isOnline && socket && roomId) {
       socket.emit('sync_state', {
         roomId,
-        state: {
-          startPageMode,
-          customStartPage,
-          movesPhase1,
-          movesPhaseN,
-          turnTimeLimit,
-          moveTimeLimit,
-          p1Target,
-          p2Target,
-          currentPlayer,
-          turnCount,
-          movesMade,
-          currentPage,
-          turnHistory,
-          globalHistory,
-          timeLeft,
-          winner,
-          phase,
-          ...newStatePart
-        }
+        state: newStatePart
       });
     }
   };
@@ -268,18 +250,26 @@ export default function App() {
     if (player === 1) {
       if (!p1Target) return showToast('目標ページを設定してください');
       setP1Ready(true);
-      emitStateUpdate({ p1Ready: true });
+      if (isOnline && socket && roomId) {
+        socket.emit('sync_state', { roomId, state: { p1Ready: true } });
+      }
       if (p2Ready) {
         setPhase('confirm');
-        emitStateUpdate({ phase: 'confirm' });
+        if (isOnline && socket && roomId) {
+          socket.emit('sync_state', { roomId, state: { phase: 'confirm' } });
+        }
       }
     } else {
       if (!p2Target) return showToast('目標ページを設定してください');
       setP2Ready(true);
-      emitStateUpdate({ p2Ready: true });
+      if (isOnline && socket && roomId) {
+        socket.emit('sync_state', { roomId, state: { p2Ready: true } });
+      }
       if (p1Ready) {
         setPhase('confirm');
-        emitStateUpdate({ phase: 'confirm' });
+        if (isOnline && socket && roomId) {
+          socket.emit('sync_state', { roomId, state: { phase: 'confirm' } });
+        }
       }
     }
   };
@@ -321,6 +311,7 @@ export default function App() {
       setWinner(null);
       setTimeLeft(initialTimeLeft);
       setPhase('playing');
+      setNavCounter(c => c + 1);
       emitStateUpdate({
         currentPage: startPage,
         globalHistory: [{ title: startPage, player: 1 }],
@@ -330,7 +321,9 @@ export default function App() {
         movesMade: 0,
         winner: null,
         timeLeft: initialTimeLeft,
-        phase: 'playing'
+        phase: 'playing',
+        p1Target,
+        p2Target
       });
     } catch (e) {
       showToast('ランダム記事の取得に失敗しました');
@@ -356,10 +349,16 @@ export default function App() {
     } catch(e) {
       decodedTitle = rawTitle.replace(/_/g, ' ');
     }
+
+    // Skip self-referencing links (link to current page) to prevent undo issues
+    if (decodedTitle === currentPage) {
+      return;
+    }
     
     // Win condition check - ALWAYS allows navigation if it's the target page!
     if (decodedTitle === currentTarget) {
       setCurrentPage(decodedTitle);
+      setNavCounter(c => c + 1);
       
       const finalHistory: HistoryEntry[] = [...globalHistory, { title: decodedTitle, player: currentPlayer }];
       setGlobalHistory(finalHistory);
@@ -396,21 +395,16 @@ export default function App() {
       return;
     }
 
-    // Normal move
+// Normal move
     setCurrentPage(decodedTitle);
     setMovesMade(m => m + 1);
+    setNavCounter(c => c + 1);
     if (moveTimeLimit > 0) {
       setTimeLeft(moveTimeLimit);
     }
-    setGlobalHistory(h => {
-      const newHistory = [...h, { title: decodedTitle, player: currentPlayer }];
-      setTurnHistory(th => {
-        const newTurn = [...th, decodedTitle];
-        emitStateUpdate({ currentPage: decodedTitle, movesMade: movesMade + 1, globalHistory: newHistory, turnHistory: newTurn, timeLeft: moveTimeLimit > 0 ? moveTimeLimit : timeLeft });
-        return newTurn;
-      });
-      return newHistory;
-    });
+    setGlobalHistory(h => [...h, { title: decodedTitle, player: currentPlayer }]);
+    setTurnHistory(th => [...th, decodedTitle]);
+    emitStateUpdate({ currentPage: decodedTitle, movesMade: movesMade + 1, timeLeft: moveTimeLimit > 0 ? moveTimeLimit : timeLeft });
   };
 
   useEffect(() => {
@@ -422,9 +416,19 @@ export default function App() {
           socket?.emit('sync_scroll', { roomId, scrollY: e.data.scrollY });
         } else if (e.data.type === 'WIKI_CURSOR' && isOnline && myPlayerNum === currentPlayer) {
           socket?.emit('sync_cursor', { roomId, x: e.data.x, y: e.data.y });
-        } else if (e.data.type === 'RANDOM_LINK_RESULT') {
+} else if (e.data.type === 'RANDOM_LINK_RESULT') {
           if (e.data.title) {
-            handleLinkClick(e.data.title);
+            let randomTitle = '';
+            try {
+              randomTitle = decodeURIComponent(e.data.title).replace(/_/g, ' ');
+            } catch(err) {
+              randomTitle = e.data.title.replace(/_/g, ' ');
+            }
+            if (randomTitle === currentPage) {
+              handleEndTurn();
+            } else {
+              handleLinkClick(e.data.title);
+            }
           } else {
             handleEndTurn();
           }
@@ -433,7 +437,7 @@ export default function App() {
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [movesMade, maxMoves, currentTarget, currentPlayer, phase, isOnline, myPlayerNum, socket, roomId]);
+  }, [movesMade, maxMoves, currentTarget, currentPlayer, phase, isOnline, myPlayerNum, socket, roomId, currentPage]);
 
   const handleEndTurn = () => {
     if (isOnline && myPlayerNum !== currentPlayer) return;
@@ -460,38 +464,54 @@ export default function App() {
       } else if (moveTimeLimit > 0) {
         if (movesMade >= maxMoves) {
           handleEndTurn();
-        } else {
+        } else if (!isOnline || myPlayerNum === currentPlayer) {
           const iframe = iframeRef.current;
           if (iframe && iframe.contentWindow) {
-            iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK' }, '*');
+            iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK', currentTitle: currentPage }, '*');
           }
         }
       }
       return;
     }
     
-    const timerId = setTimeout(() => {
-      setTimeLeft(t => t - 1);
-    }, 1000);
+    const startedAt = Date.now();
+    const intervalMs = 200;
+    const intervalId = setInterval(() => {
+      const elapsedMs = Date.now() - startedAt;
+      const elapsed = Math.floor(elapsedMs / 1000);
+      const corrected = Math.max(0, timeLeft - elapsed);
+      if (corrected !== timeLeft) {
+        setTimeLeft(corrected);
+      } else if (elapsed >= 1) {
+        setTimeLeft(t => Math.max(0, t - 1));
+      }
+    }, intervalMs);
     
-    return () => clearTimeout(timerId);
+    return () => clearInterval(intervalId);
   }, [timeLeft, phase, turnTimeLimit, moveTimeLimit, currentPage, currentPlayer, isSuspended, movesMade, maxMoves]);
 
-  const executeUndo = () => {
-    if (turnHistory.length > 1) {
-      const newHistory = [...turnHistory];
-      newHistory.pop(); // remove current
+const executeUndo = () => {
+    setTurnHistory(prev => {
+      if (prev.length <= 1) return prev;
+      const newHistory = [...prev];
+      newHistory.pop();
       const previousPage = newHistory[newHistory.length - 1];
-      
+
       setCurrentPage(previousPage);
-      setTurnHistory(newHistory);
-      setMovesMade(m => m - 1);
-      
-      const newGlobal = [...globalHistory];
-      newGlobal.pop();
-      setGlobalHistory(newGlobal);
-      emitStateUpdate({ currentPage: previousPage, turnHistory: newHistory, movesMade: movesMade - 1, globalHistory: newGlobal });
-    }
+      setMovesMade(m => Math.max(0, m - 1));
+      setNavCounter(c => c + 1);
+      if (moveTimeLimit > 0) {
+        setTimeLeft(moveTimeLimit);
+      }
+
+      setGlobalHistory(g => {
+        const newGlobal = [...g];
+        newGlobal.pop();
+        emitStateUpdate({ currentPage: previousPage, turnHistory: newHistory, movesMade: movesMade > 0 ? movesMade - 1 : 0, globalHistory: newGlobal });
+        return newGlobal;
+      });
+      return newHistory;
+    });
   };
 
   const handleUndo = () => {
@@ -574,6 +594,7 @@ export default function App() {
         setTurnHistory(state.turnHistory);
         setGlobalHistory((state.globalHistory || []).map(entry => typeof entry === 'string' ? { title: entry, player: 1 } : entry));
         setTimeLeft(state.timeLeft);
+        setNavCounter(c => c + 1);
         setPhase(state.phase);
       } catch(e) {
         showToast('セーブデータの読み込みに失敗しました');
@@ -805,7 +826,7 @@ export default function App() {
                       {p1Target} (準備完了)
                     </div>
                     <button
-                      onClick={() => {
+onClick={() => {
                         setP1Ready(false);
                         emitStateUpdate({ p1Ready: false });
                       }}
@@ -853,7 +874,7 @@ export default function App() {
                       {p2Target} (準備完了)
                     </div>
                     <button
-                      onClick={() => {
+onClick={() => {
                         setP2Ready(false);
                         emitStateUpdate({ p2Ready: false });
                       }}
@@ -1069,11 +1090,11 @@ export default function App() {
                      if (myPlayerNum === 1) setP1Ready(false);
                      if (myPlayerNum === 2) setP2Ready(false);
                      setPhase('setup');
-                     emitStateUpdate({
-                       p1Ready: myPlayerNum === 1 ? false : p1Ready,
-                       p2Ready: myPlayerNum === 2 ? false : p2Ready,
-                       phase: 'setup'
-                     });
+emitStateUpdate({
+                        p1Ready: myPlayerNum === 1 ? false : p1Ready,
+                        p2Ready: myPlayerNum === 2 ? false : p2Ready,
+                        phase: 'setup'
+                      });
                     } else {
                       setP1Ready(false);
                       setP2Ready(false);
@@ -1134,8 +1155,21 @@ export default function App() {
                 移動: {movesMade} / {maxMoves}
               </span>
               {(turnTimeLimit > 0 || moveTimeLimit > 0) && (
-                <span className={`text-sm font-bold ml-2 flex items-center gap-1 ${timeLeft <= 5 ? 'text-red-600 animate-pulse' : 'text-gray-700'}`}>
+                <span className={`text-sm font-bold ml-2 flex items-center gap-1 ${timeLeft <= 5 ? 'text-red-600' : 'text-gray-700'}`}>
                   {moveTimeLimit > 0 ? '移動時間' : '残り時間'}: {timeLeft}秒
+                  <span
+                    className="inline-block"
+                    style={{
+                      display: 'inline-block',
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      backgroundColor: timeLeft <= 5 ? '#dc2626' : '#6b7280',
+                      transition: 'transform 0.9s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.3s',
+                      transform: timeLeft <= 5 ? 'scale(1.5)' : 'scale(1)',
+                      WebkitTransform: timeLeft <= 5 ? 'scale(1.5)' : 'scale(1)',
+                    }}
+                  />
                 </span>
               )}
             </div>

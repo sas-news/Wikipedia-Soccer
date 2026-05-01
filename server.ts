@@ -239,14 +239,30 @@ async function startServer() {
 
           window.addEventListener('message', function(e) {
             if (e.data.type === 'GET_RANDOM_LINK') {
-              const links = Array.from(document.querySelectorAll('a[href^="/wiki/"]'));
-              const validLinks = links.filter(function(a) {
-                const href = a.getAttribute('href');
-                return href && !href.includes(':');
+              var currentTitle = e.data.currentTitle || '';
+              try { currentTitle = decodeURIComponent(currentTitle).replace(/_/g, ' '); } catch(err) {}
+              var currentPathTitle = window.location.pathname.replace('/wiki/', '');
+              try { currentPathTitle = decodeURIComponent(currentPathTitle).replace(/_/g, ' '); } catch(err) {}
+              var mainPageTitles = ['メインページ', 'Main Page'];
+              var links = Array.from(document.querySelectorAll('a[href^="/wiki/"]'));
+              var validLinks = links.filter(function(a) {
+                var href = a.getAttribute('href');
+                if (!href) return false;
+                if (href.includes(':')) return false;
+                if (href === '/wiki/' || href === '/wiki') return false;
+                try {
+                  var linkTitle = decodeURIComponent(href.replace('/wiki/', '')).replace(/_/g, ' ');
+                  if (linkTitle === currentTitle) return false;
+                  if (linkTitle === currentPathTitle) return false;
+                  for (var i = 0; i < mainPageTitles.length; i++) {
+                    if (linkTitle === mainPageTitles[i]) return false;
+                  }
+                } catch(err) {}
+                return true;
               });
               if (validLinks.length > 0) {
-                const randomLink = validLinks[Math.floor(Math.random() * validLinks.length)];
-                const title = randomLink.getAttribute('href').replace('/wiki/', '');
+                var randomLink = validLinks[Math.floor(Math.random() * validLinks.length)];
+                var title = randomLink.getAttribute('href').replace('/wiki/', '');
                 window.parent.postMessage({ type: 'RANDOM_LINK_RESULT', title: title }, '*');
               } else {
                 window.parent.postMessage({ type: 'RANDOM_LINK_RESULT', title: null }, '*');
