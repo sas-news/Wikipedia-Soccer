@@ -3,9 +3,17 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { initDatabase } from './src/server/db';
+import { seedDatabase } from './src/server/seed';
+import difficultyRoutes, { handleRandomWithDifficulty } from './src/server/routes/difficulty';
 
 async function startServer() {
+  initDatabase();
+  seedDatabase().catch((e) => console.error('[DifficultyDB] Background seed error:', e));
+
   const app = express();
+  app.use(express.json());
+
   const PORT = 3011;
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
@@ -305,14 +313,16 @@ async function startServer() {
   // API to get a random article (excluding special pages/categories)
   app.get('/api/random', async (req, res) => {
     try {
-      const url = 'https://ja.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=1&format=json';
-      const response = await fetch(url);
-      const data = await response.json();
-      res.json({ title: data.query.random[0].title });
+      const difficulty = req.query.difficulty as string | undefined;
+      const result = await handleRandomWithDifficulty(difficulty);
+      res.json(result);
     } catch (e) {
       res.status(500).json({ error: 'Failed to fetch random page' });
     }
   });
+
+  // Difficulty-related API routes
+  app.use('/api', difficultyRoutes);
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {

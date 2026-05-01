@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe } from 'lucide-react';
+import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe, Loader2 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
+import DifficultySelector from './components/DifficultySelector';
+import CustomDifficultyPanel from './components/CustomDifficultyPanel';
+import ArticleInspector from './components/ArticleInspector';
+import type { CustomDifficultyParams } from './types/difficulty';
 
-type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting';
+type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting' | 'inspector';
 
 type HistoryEntry = { title: string; player: 1 | 2 };
 
@@ -33,6 +37,12 @@ interface SavedGame {
   turnHistory: string[];
   globalHistory: HistoryEntry[];
   timeLeft: number;
+  p1DifficultyMode?: 'preset' | 'custom' | 'none';
+  p2DifficultyMode?: 'preset' | 'custom' | 'none';
+  p1DifficultyPreset?: string;
+  p2DifficultyPreset?: string;
+  p1CustomParams?: CustomDifficultyParams;
+  p2CustomParams?: CustomDifficultyParams;
 }
 const SAVE_KEY = 'wiki_soccer_save';
 
@@ -50,6 +60,13 @@ export default function App() {
   // Setup
   const [p1Target, setP1Target] = useState('');
   const [p2Target, setP2Target] = useState('');
+  const [p1DifficultyMode, setP1DifficultyMode] = useState<'preset' | 'custom' | 'none'>('none');
+  const [p2DifficultyMode, setP2DifficultyMode] = useState<'preset' | 'custom' | 'none'>('none');
+  const [p1DifficultyPreset, setP1DifficultyPreset] = useState<string | null>(null);
+  const [p2DifficultyPreset, setP2DifficultyPreset] = useState<string | null>(null);
+  const [p1CustomParams, setP1CustomParams] = useState<CustomDifficultyParams | undefined>(undefined);
+  const [p2CustomParams, setP2CustomParams] = useState<CustomDifficultyParams | undefined>(undefined);
+  const [fetchingRandom, setFetchingRandom] = useState<{ p1: boolean; p2: boolean }>({ p1: false, p2: false });
   const [isStarting, setIsStarting] = useState(false);
 
   // Game State
@@ -120,6 +137,10 @@ export default function App() {
       if (state.p1Ready !== undefined) setP1Ready(state.p1Ready);
       if (state.p2Ready !== undefined) setP2Ready(state.p2Ready);
       if (state.pageLoaded !== undefined) setPageLoaded(state.pageLoaded);
+      if (state.p1DifficultyPreset !== undefined && myPlayerNum !== 1) setP1DifficultyPreset(state.p1DifficultyPreset);
+      if (state.p2DifficultyPreset !== undefined && myPlayerNum !== 2) setP2DifficultyPreset(state.p2DifficultyPreset);
+      if (state.p1DifficultyMode !== undefined && myPlayerNum !== 1) setP1DifficultyMode(state.p1DifficultyMode);
+      if (state.p2DifficultyMode !== undefined && myPlayerNum !== 2) setP2DifficultyMode(state.p2DifficultyMode);
     });
 
     socket.on('sync_scroll', (data: { scrollY: number }) => {
@@ -296,10 +317,31 @@ export default function App() {
     setPhase('confirm');
   };
 
-  const fetchRandomTarget = async (setTarget: (target: string) => void) => {
+  const fetchRandomTarget = async (
+    setTarget: (target: string) => void,
+    difficultyPreset?: string | null,
+    customParams?: CustomDifficultyParams
+  ) => {
     try {
-      const res = await fetch('/api/random');
+      let url = '/api/random';
+      const options: RequestInit = {};
+
+      if (difficultyPreset) {
+        url = `/api/random?difficulty=${encodeURIComponent(difficultyPreset)}`;
+      } else if (customParams && Object.keys(customParams).length > 0) {
+        url = '/api/difficulty/custom';
+        options.method = 'POST';
+        options.headers = { 'Content-Type': 'application/json' };
+        options.body = JSON.stringify(customParams);
+      }
+
+      const res = await fetch(url, options);
       const data = await res.json();
+
+      if (data.fallback && data.message) {
+        showToast(data.message);
+      }
+
       setTarget(data.title);
     } catch (e) {
       showToast('ランダム記事の取得に失敗しました');
@@ -771,6 +813,13 @@ const executeUndo = () => {
               </div>
             )}
             
+            <button
+              onClick={() => setPhase('inspector')}
+              className="w-full mt-3 py-3 px-4 bg-white border-2 border-gray-200 text-gray-700 font-bold rounded-xl shadow-sm hover:bg-gray-50 flex items-center justify-center gap-2 transition-colors"
+            >
+              難易度データベース内訳を見る
+            </button>
+
             {localStorage.getItem('wiki_soccer_past_records') && (
               <button
                 onClick={() => setPhase('history')}
@@ -843,10 +892,23 @@ const executeUndo = () => {
                   </label>
                   {!p1Ready && (
                     <button
-                      onClick={() => fetchRandomTarget(setP1Target)}
-                      className="flex items-center gap-1 text-xs font-bold px-2 py-1 rounded transition-colors bg-red-100 hover:bg-red-200 text-red-700"
+                      onClick={() => {
+                        const preset = p1DifficultyMode === 'preset' ? p1DifficultyPreset : null;
+                        const custom = p1DifficultyMode === 'custom' ? p1CustomParams : undefined;
+                        setFetchingRandom(prev => ({ ...prev, p1: true }));
+                        fetchRandomTarget(setP1Target, preset, custom).finally(() => {
+                          setFetchingRandom(prev => ({ ...prev, p1: false }));
+                        });
+                      }}
+                      disabled={fetchingRandom.p1}
+                      className="flex items-center gap-1 text-xs font-bold px-2 py-1 rounded transition-colors bg-red-100 hover:bg-red-200 text-red-700 disabled:opacity-50"
                     >
-                      <Dices className="w-3 h-3" /> ランダム
+                      {fetchingRandom.p1 ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Dices className="w-3 h-3" />
+                      )}
+                      ランダム取得
                     </button>
                   )}
                 </div>
@@ -856,7 +918,7 @@ const executeUndo = () => {
                       {p1Target} (準備完了)
                     </div>
                     <button
-onClick={() => {
+                      onClick={() => {
                         setP1Ready(false);
                         emitStateUpdate({ p1Ready: false });
                       }}
@@ -866,11 +928,45 @@ onClick={() => {
                     </button>
                   </div>
                 ) : (
-                  <WikiAutocomplete 
-                    value={p1Target} 
-                    onChange={setP1Target} 
-                    placeholder="例: 織田信長" 
-                  />
+                  <>
+                    <WikiAutocomplete
+                      value={p1Target}
+                      onChange={setP1Target}
+                      placeholder="例: 織田信長"
+                    />
+                    <div className="mt-3 space-y-2">
+                      <DifficultySelector
+                        selectedPreset={p1DifficultyPreset}
+                        onSelect={(id) => {
+                          setP1DifficultyPreset(id);
+                          setP1DifficultyMode(id === null ? 'none' : 'preset');
+                          if (isOnline && socket && roomId) {
+                            socket.emit('sync_state', {
+                              roomId,
+                              state: {
+                                p1DifficultyPreset: id,
+                                p1DifficultyMode: id === null ? 'none' : 'preset',
+                              },
+                            });
+                          }
+                        }}
+                        disabled={fetchingRandom.p1}
+                      />
+                      {p1DifficultyMode === 'preset' && p1DifficultyPreset === 'custom' && (
+                        <CustomDifficultyPanel
+                          onTest={(params) => {
+                            setP1CustomParams(params);
+                            setP1DifficultyMode('custom');
+                            setFetchingRandom(prev => ({ ...prev, p1: true }));
+                            fetchRandomTarget(setP1Target, null, params).finally(() => {
+                              setFetchingRandom(prev => ({ ...prev, p1: false }));
+                            });
+                          }}
+                          disabled={fetchingRandom.p1}
+                        />
+                      )}
+                    </div>
+                  </>
                 )}
                 {isOnline && !p1Ready && (
                   <button
@@ -891,10 +987,23 @@ onClick={() => {
                   </label>
                   {!p2Ready && (
                     <button
-                      onClick={() => fetchRandomTarget(setP2Target)}
-                      className="flex items-center gap-1 text-xs font-bold px-2 py-1 rounded transition-colors bg-blue-100 hover:bg-blue-200 text-blue-700"
+                      onClick={() => {
+                        const preset = p2DifficultyMode === 'preset' ? p2DifficultyPreset : null;
+                        const custom = p2DifficultyMode === 'custom' ? p2CustomParams : undefined;
+                        setFetchingRandom(prev => ({ ...prev, p2: true }));
+                        fetchRandomTarget(setP2Target, preset, custom).finally(() => {
+                          setFetchingRandom(prev => ({ ...prev, p2: false }));
+                        });
+                      }}
+                      disabled={fetchingRandom.p2}
+                      className="flex items-center gap-1 text-xs font-bold px-2 py-1 rounded transition-colors bg-blue-100 hover:bg-blue-200 text-blue-700 disabled:opacity-50"
                     >
-                      <Dices className="w-3 h-3" /> ランダム
+                      {fetchingRandom.p2 ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Dices className="w-3 h-3" />
+                      )}
+                      ランダム取得
                     </button>
                   )}
                 </div>
@@ -914,11 +1023,45 @@ onClick={() => {
                     </button>
                   </div>
                 ) : (
-                  <WikiAutocomplete
-                    value={p2Target}
-                    onChange={setP2Target}
-                    placeholder="例: 織田信長"
-                  />
+                  <>
+                    <WikiAutocomplete
+                      value={p2Target}
+                      onChange={setP2Target}
+                      placeholder="例: 織田信長"
+                    />
+                    <div className="mt-3 space-y-2">
+                      <DifficultySelector
+                        selectedPreset={p2DifficultyPreset}
+                        onSelect={(id) => {
+                          setP2DifficultyPreset(id);
+                          setP2DifficultyMode(id === null ? 'none' : 'preset');
+                          if (isOnline && socket && roomId) {
+                            socket.emit('sync_state', {
+                              roomId,
+                              state: {
+                                p2DifficultyPreset: id,
+                                p2DifficultyMode: id === null ? 'none' : 'preset',
+                              },
+                            });
+                          }
+                        }}
+                        disabled={fetchingRandom.p2}
+                      />
+                      {p2DifficultyMode === 'preset' && p2DifficultyPreset === 'custom' && (
+                        <CustomDifficultyPanel
+                          onTest={(params) => {
+                            setP2CustomParams(params);
+                            setP2DifficultyMode('custom');
+                            setFetchingRandom(prev => ({ ...prev, p2: true }));
+                            fetchRandomTarget(setP2Target, null, params).finally(() => {
+                              setFetchingRandom(prev => ({ ...prev, p2: false }));
+                            });
+                          }}
+                          disabled={fetchingRandom.p2}
+                        />
+                      )}
+                    </div>
+                  </>
                 )}
                 {isOnline && !p2Ready && (
                   <button
@@ -948,9 +1091,13 @@ onClick={() => {
             )}
 
           </div>
-        </div>
+         </div>
       </div>
     );
+  }
+
+  if (phase === 'inspector') {
+    return <ArticleInspector onBack={() => setPhase('settings')} />;
   }
 
   if (phase === 'online_setup') {
