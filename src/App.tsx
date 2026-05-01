@@ -95,12 +95,6 @@ export default function App() {
     setPageLoaded(false);
   }, [currentPage]);
 
-  useEffect(() => {
-    if (pageLoaded && phase === 'playing' && moveTimeLimit > 0 && timeLeft <= 0) {
-      setTimeLeft(moveTimeLimit);
-    }
-  }, [pageLoaded, phase, moveTimeLimit, timeLeft]);
-
   // Online Multiplayer Socket Logic
   useEffect(() => {
     if (!socket) return;
@@ -1089,8 +1083,8 @@ onClick={() => {
                 <span className="font-bold text-gray-900">{startPageMode === 'random' ? 'ランダム設定' : customStartPage}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-500 font-bold">ターン制限時間:</span>
-                <span className="font-bold text-gray-900">{turnTimeLimit > 0 ? `${turnTimeLimit}秒` : '無制限 (なし)'}</span>
+                <span className="text-gray-500 font-bold">制限時間:</span>
+                <span className="font-bold text-gray-900">{moveTimeLimit > 0 ? `1移動制限: ${moveTimeLimit}秒` : turnTimeLimit > 0 ? `ターン制限: ${turnTimeLimit}秒` : '無制限 (なし)'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500 font-bold">移動回数:</span>
