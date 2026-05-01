@@ -80,6 +80,8 @@ export default function App() {
   const [undoRequest, setUndoRequest] = useState<{fromPlayer: 1 | 2} | null>(null);
   const [setupTargetPlayer, setSetupTargetPlayer] = useState<1 | 2 | null>(null);
   const [navCounter, setNavCounter] = useState(0);
+  const [pageLoaded, setPageLoaded] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
@@ -87,6 +89,10 @@ export default function App() {
   }, [phase]);
 
   const iframeKey = `${currentPage}-${globalHistory.length}-${navCounter}`;
+
+  useEffect(() => {
+    setPageLoaded(false);
+  }, [currentPage]);
 
   // Online Multiplayer Socket Logic
   useEffect(() => {
@@ -112,6 +118,7 @@ export default function App() {
       if (state.phase !== undefined) setPhase(state.phase);
       if (state.p1Ready !== undefined) setP1Ready(state.p1Ready);
       if (state.p2Ready !== undefined) setP2Ready(state.p2Ready);
+      if (state.pageLoaded !== undefined) setPageLoaded(state.pageLoaded);
     });
 
     socket.on('sync_scroll', (data: { scrollY: number }) => {
@@ -190,30 +197,34 @@ export default function App() {
   };
 
   const joinRoom = () => {
+    if (isJoining) return;
     if (!roomId) {
       showToast('Room IDを入力してください');
       return;
     }
+    setIsJoining(true);
     const newSocket = io();
     setSocket(newSocket);
-    
+
     newSocket.emit('join_room', roomId);
     newSocket.on('room_full', () => {
       showToast('ルームが満員です');
       newSocket.disconnect();
       setSocket(null);
+      setIsJoining(false);
     });
     newSocket.on('joined', (data: { playerNum: 1 | 2 | 'spectator' }) => {
       setMyPlayerNum(data.playerNum);
       setIsOnline(true);
-      
+      setIsJoining(false);
+
       if (data.playerNum === 'spectator') {
         setPhase('online_waiting');
         showToast('観戦者として参加しました');
       } else {
         setPhase('online_waiting');
       }
-      
+
       newSocket.on('game_ready', () => {
         setPhase('setup');
         setP1Ready(false);
@@ -251,7 +262,7 @@ export default function App() {
       if (!p1Target) return showToast('目標ページを設定してください');
       setP1Ready(true);
       if (isOnline && socket && roomId) {
-        socket.emit('sync_state', { roomId, state: { p1Ready: true } });
+        socket.emit('sync_state', { roomId, state: { p1Ready: true, p1Target } });
       }
       if (p2Ready) {
         setPhase('confirm');
@@ -263,7 +274,7 @@ export default function App() {
       if (!p2Target) return showToast('目標ページを設定してください');
       setP2Ready(true);
       if (isOnline && socket && roomId) {
-        socket.emit('sync_state', { roomId, state: { p2Ready: true } });
+        socket.emit('sync_state', { roomId, state: { p2Ready: true, p2Target } });
       }
       if (p1Ready) {
         setPhase('confirm');
@@ -272,6 +283,16 @@ export default function App() {
         }
       }
     }
+  };
+
+  const handleLocalReady = () => {
+    if (!p1Target || !p2Target) {
+      showToast('両プレイヤーの目標を設定してください');
+      return;
+    }
+    setP1Ready(true);
+    setP2Ready(true);
+    setPhase('confirm');
   };
 
   const fetchRandomTarget = async (setTarget: (target: string) => void) => {
@@ -285,7 +306,7 @@ export default function App() {
   };
 
   const startGame = async () => {
-    if (!p2Target) {
+    if (!p1Target || !p2Target) {
       showToast('目標ページを設定してください');
       return;
     }
@@ -454,7 +475,8 @@ export default function App() {
 
   useEffect(() => {
     if (phase !== 'playing' || isSuspended) return;
-    
+    if (!pageLoaded) return;
+
     const limit = turnTimeLimit > 0 ? turnTimeLimit : moveTimeLimit;
     if (limit === 0) return;
     
@@ -488,7 +510,7 @@ export default function App() {
     }, intervalMs);
     
     return () => clearInterval(intervalId);
-  }, [timeLeft, phase, turnTimeLimit, moveTimeLimit, currentPage, currentPlayer, isSuspended, movesMade, maxMoves]);
+  }, [timeLeft, phase, turnTimeLimit, moveTimeLimit, currentPage, currentPlayer, isSuspended, movesMade, maxMoves, pageLoaded]);
 
 const executeUndo = () => {
     setTurnHistory(prev => {
@@ -842,7 +864,7 @@ onClick={() => {
                     placeholder="例: 織田信長" 
                   />
                 )}
-                {!p1Ready && (
+                {isOnline && !p1Ready && (
                   <button
                     onClick={() => handleReady(1)}
                     className="w-full mt-3 py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg"
@@ -874,7 +896,7 @@ onClick={() => {
                       {p2Target} (準備完了)
                     </div>
                     <button
-onClick={() => {
+                      onClick={() => {
                         setP2Ready(false);
                         emitStateUpdate({ p2Ready: false });
                       }}
@@ -884,13 +906,13 @@ onClick={() => {
                     </button>
                   </div>
                 ) : (
-                  <WikiAutocomplete 
-                    value={p2Target} 
-                    onChange={setP2Target} 
-                    placeholder="例: 織田信長" 
+                  <WikiAutocomplete
+                    value={p2Target}
+                    onChange={setP2Target}
+                    placeholder="例: 織田信長"
                   />
                 )}
-                {!p2Ready && (
+                {isOnline && !p2Ready && (
                   <button
                     onClick={() => handleReady(2)}
                     className="w-full mt-3 py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg"
@@ -899,6 +921,16 @@ onClick={() => {
                   </button>
                 )}
               </div>
+            )}
+
+            {!isOnline && (
+              <button
+                onClick={handleLocalReady}
+                disabled={!p1Target || !p2Target}
+                className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg transition-colors"
+              >
+                設定完了
+              </button>
             )}
 
             {isOnline && (myPlayerNum === 1 ? p1Ready && !p2Ready : p2Ready && !p1Ready) && (
@@ -934,9 +966,10 @@ onClick={() => {
             </div>
             <button
               onClick={joinRoom}
-              className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg transition-colors"
+              disabled={isJoining}
+              className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg transition-colors"
             >
-              ルームに参加 / 作成
+              {isJoining ? '参加中...' : 'ルームに参加 / 作成'}
             </button>
             <button
               onClick={() => setPhase('settings')}
@@ -1066,12 +1099,12 @@ onClick={() => {
 
             <button
                onClick={startGame}
-               disabled={isStarting || (isOnline && myPlayerNum === 2)}
+               disabled={isStarting || (isOnline && myPlayerNum !== 1)}
                className="w-full mt-6 py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
             >
                {isStarting ? (
                   <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (isOnline && myPlayerNum === 2) ? (
+                ) : (isOnline && myPlayerNum !== 1) ? (
                   <> Player 1の開始を待機中...</>
                 ) : (
                   <> <Play className="w-5 h-5" /> Game Start</>
@@ -1406,11 +1439,17 @@ emitStateUpdate({
             style={{ left: `${cursorPos.x * 100}%`, top: `${cursorPos.y * 100}%` }}
           />
         )}
-        <iframe 
+        <iframe
           key={iframeKey}
           ref={iframeRef}
           title="Wikipedia"
           src={currentPage ? `/proxy/wiki/${encodeURIComponent(currentPage)}` : ''}
+          onLoad={() => {
+            setPageLoaded(true);
+            if (isOnline && myPlayerNum === currentPlayer) {
+              emitStateUpdate({ pageLoaded: true });
+            }
+          }}
           className="w-full h-full border-0 absolute inset-0"
         />
       </div>
