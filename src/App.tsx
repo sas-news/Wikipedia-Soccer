@@ -426,6 +426,7 @@ export default function App() {
     }
     setGlobalHistory(h => [...h, { title: decodedTitle, player: currentPlayer }]);
     setTurnHistory(th => [...th, decodedTitle]);
+    isFiringRandomMove.current = false;
     emitStateUpdate({ currentPage: decodedTitle, movesMade: movesMade + 1, timeLeft: moveTimeLimit > 0 ? moveTimeLimit : timeLeft });
   };
 
@@ -519,6 +520,7 @@ export default function App() {
   }, [timeLeft, phase, turnTimeLimit, moveTimeLimit, currentPage, currentPlayer, isSuspended, movesMade, maxMoves, pageLoaded]);
 
 const executeUndo = () => {
+    isFiringRandomMove.current = false;
     setTurnHistory(prev => {
       if (prev.length <= 1) return prev;
       const newHistory = [...prev];

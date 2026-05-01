@@ -119,7 +119,14 @@ async function startServer() {
       });
       
       if (!response.ok) {
-        return res.status(response.status).send(`Failed to fetch from Wikipedia: ${response.statusText}`);
+        try {
+          const randomRes = await fetch('https://ja.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=1&format=json');
+          const randomData = await randomRes.json();
+          const fallbackTitle = randomData.query.random[0].title;
+          return res.redirect(`/proxy/wiki/${encodeURIComponent(fallbackTitle)}`);
+        } catch (e) {
+          return res.status(response.status).send(`Failed to fetch from Wikipedia: ${response.statusText}`);
+        }
       }
 
       const contentType = response.headers.get('content-type');
@@ -244,6 +251,13 @@ async function startServer() {
               var currentPathTitle = window.location.pathname.replace('/wiki/', '');
               try { currentPathTitle = decodeURIComponent(currentPathTitle).replace(/_/g, ' '); } catch(err) {}
               var mainPageTitles = ['メインページ', 'Main Page'];
+              var pageTitle = document.title || '';
+              var bodyText = document.body ? document.body.innerText : '';
+              var isErrorPage = /エラー|Error|404|Not Found|項目はありません|does not exist/i.test(pageTitle) || /項目はありません|does not exist|このページは存在しません/i.test(bodyText);
+              if (isErrorPage) {
+                window.parent.postMessage({ type: 'RANDOM_LINK_RESULT', title: null }, '*');
+                return;
+              }
               var allLinks = Array.from(document.links);
               var validLinks = allLinks.filter(function(a) {
                 try {
