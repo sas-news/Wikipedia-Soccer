@@ -502,20 +502,11 @@ export default function App() {
       return;
     }
     
-    const startedAt = Date.now();
-    const intervalMs = 200;
-    const intervalId = setInterval(() => {
-      const elapsedMs = Date.now() - startedAt;
-      const elapsed = Math.floor(elapsedMs / 1000);
-      const corrected = Math.max(0, timeLeft - elapsed);
-      if (corrected !== timeLeft) {
-        setTimeLeft(corrected);
-      } else if (elapsed >= 1) {
-        setTimeLeft(t => Math.max(0, t - 1));
-      }
-    }, intervalMs);
-    
-    return () => clearInterval(intervalId);
+    const timerId = setTimeout(() => {
+      setTimeLeft(t => Math.max(0, t - 1));
+    }, 1000);
+
+    return () => clearTimeout(timerId);
   }, [timeLeft, phase, turnTimeLimit, moveTimeLimit, currentPage, currentPlayer, isSuspended, movesMade, maxMoves, pageLoaded]);
 
 const executeUndo = () => {
