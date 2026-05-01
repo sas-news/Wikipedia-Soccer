@@ -355,7 +355,6 @@ export default function App() {
   };
 
   const handleLinkClick = (rawTitle: string) => {
-    isFiringRandomMove.current = false;
     if (phase !== 'playing') return;
     if (isSuspended) {
       showToast('中断中は操作できません');
@@ -448,12 +447,20 @@ export default function App() {
               randomTitle = e.data.title.replace(/_/g, ' ');
             }
             if (randomTitle === currentPage) {
-              handleEndTurn();
+              isFiringRandomMove.current = false;
+              const iframe = iframeRef.current;
+              if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK', currentTitle: currentPage }, '*');
+              }
             } else {
               handleLinkClick(e.data.title);
             }
           } else {
-            handleEndTurn();
+            isFiringRandomMove.current = false;
+            const iframe = iframeRef.current;
+            if (iframe && iframe.contentWindow) {
+              iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK', currentTitle: currentPage }, '*');
+            }
           }
         }
       }
@@ -503,7 +510,9 @@ export default function App() {
     }
     
     const timerId = setTimeout(() => {
-      setTimeLeft(t => Math.max(0, t - 1));
+      if (timeLeft > 0) {
+        setTimeLeft(t => Math.max(0, t - 1));
+      }
     }, 1000);
 
     return () => clearTimeout(timerId);
