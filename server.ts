@@ -245,14 +245,13 @@ async function startServer() {
               try { currentPathTitle = decodeURIComponent(currentPathTitle).replace(/_/g, ' '); } catch(err) {}
               var mainPageTitles = ['メインページ', 'Main Page'];
               var contentEl = document.getElementById('mw-content-text');
-              var links = contentEl ? Array.from(contentEl.querySelectorAll('a[href^="/wiki/"]')) : [];
+              var links = contentEl ? Array.from(contentEl.querySelectorAll('a[href^="/wiki/"]')) : Array.from(document.querySelectorAll('a[href^="/wiki/"]'));
               var validLinks = links.filter(function(a) {
                 var href = a.getAttribute('href');
                 if (!href) return false;
                 if (href.includes(':')) return false;
                 if (href === '/wiki/' || href === '/wiki') return false;
-                var rect = a.getBoundingClientRect();
-                if (rect.width === 0 || rect.height === 0) return false;
+                if (!a.offsetParent) return false;
                 try {
                   var linkTitle = decodeURIComponent(href.replace('/wiki/', '')).replace(/_/g, ' ');
                   if (linkTitle === currentTitle) return false;

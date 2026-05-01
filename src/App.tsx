@@ -82,6 +82,7 @@ export default function App() {
   const [navCounter, setNavCounter] = useState(0);
   const [pageLoaded, setPageLoaded] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const isFiringRandomMove = useRef(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
@@ -93,6 +94,12 @@ export default function App() {
   useEffect(() => {
     setPageLoaded(false);
   }, [currentPage]);
+
+  useEffect(() => {
+    if (pageLoaded && phase === 'playing' && moveTimeLimit > 0 && timeLeft <= 0) {
+      setTimeLeft(moveTimeLimit);
+    }
+  }, [pageLoaded, phase, moveTimeLimit, timeLeft]);
 
   // Online Multiplayer Socket Logic
   useEffect(() => {
@@ -354,6 +361,7 @@ export default function App() {
   };
 
   const handleLinkClick = (rawTitle: string) => {
+    isFiringRandomMove.current = false;
     if (phase !== 'playing') return;
     if (isSuspended) {
       showToast('中断中は操作できません');
@@ -461,6 +469,7 @@ export default function App() {
   }, [movesMade, maxMoves, currentTarget, currentPlayer, phase, isOnline, myPlayerNum, socket, roomId, currentPage]);
 
   const handleEndTurn = () => {
+    isFiringRandomMove.current = false;
     if (isOnline && myPlayerNum !== currentPlayer) return;
     if (isSuspended) return;
     const nextPlayer = currentPlayer === 1 ? 2 : 1;
@@ -487,9 +496,12 @@ export default function App() {
         if (movesMade >= maxMoves) {
           handleEndTurn();
         } else if (!isOnline || myPlayerNum === currentPlayer) {
-          const iframe = iframeRef.current;
-          if (iframe && iframe.contentWindow) {
-            iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK', currentTitle: currentPage }, '*');
+          if (!isFiringRandomMove.current) {
+            isFiringRandomMove.current = true;
+            const iframe = iframeRef.current;
+            if (iframe && iframe.contentWindow) {
+              iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK', currentTitle: currentPage }, '*');
+            }
           }
         }
       }
