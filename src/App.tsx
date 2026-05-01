@@ -23,6 +23,7 @@ interface SavedGame {
   movesPhase1: number;
   movesPhaseN: number;
   turnTimeLimit: number;
+  moveTimeLimit: number;
   p1Target: string;
   p2Target: string;
   currentPlayer: 1 | 2;
@@ -84,35 +85,30 @@ export default function App() {
     setHasSaveData(!!localStorage.getItem(SAVE_KEY));
   }, [phase]);
 
-  useEffect(() => {
-    if (iframeRef.current && currentPage) {
-      const newSrc = `${window.location.origin}/proxy/wiki/${encodeURIComponent(currentPage)}`;
-      if (iframeRef.current.src !== newSrc) {
-        iframeRef.current.src = newSrc;
-      }
-    }
-  }, [currentPage]);
+  const iframeKey = `${currentPage}-${globalHistory.length}`;
 
   // Online Multiplayer Socket Logic
   useEffect(() => {
     if (!socket) return;
     
     socket.on('sync_state', (state: any) => {
-      setStartPageMode(state.startPageMode);
-      setCustomStartPage(state.customStartPage);
-      setMovesPhase1(state.movesPhase1);
-      setMovesPhaseN(state.movesPhaseN);
-      setTurnTimeLimit(state.turnTimeLimit);
-      setP1Target(state.p1Target);
-      setP2Target(state.p2Target);
-      setCurrentPlayer(state.currentPlayer);
-      setTurnCount(state.turnCount);
-      setMovesMade(state.movesMade);
-      setCurrentPage(state.currentPage);
-      setTurnHistory(state.turnHistory);
-      setGlobalHistory(state.globalHistory);
-      setTimeLeft(state.timeLeft);
-      setPhase(state.phase);
+      if (state.startPageMode !== undefined) setStartPageMode(state.startPageMode);
+      if (state.customStartPage !== undefined) setCustomStartPage(state.customStartPage);
+      if (state.movesPhase1 !== undefined) setMovesPhase1(state.movesPhase1);
+      if (state.movesPhaseN !== undefined) setMovesPhaseN(state.movesPhaseN);
+      if (state.turnTimeLimit !== undefined) setTurnTimeLimit(state.turnTimeLimit);
+      if (state.moveTimeLimit !== undefined) setMoveTimeLimit(state.moveTimeLimit);
+      if (state.p1Target !== undefined) setP1Target(state.p1Target);
+      if (state.p2Target !== undefined) setP2Target(state.p2Target);
+      if (state.currentPlayer !== undefined) setCurrentPlayer(state.currentPlayer);
+      if (state.turnCount !== undefined) setTurnCount(state.turnCount);
+      if (state.movesMade !== undefined) setMovesMade(state.movesMade);
+      if (state.currentPage !== undefined) setCurrentPage(state.currentPage);
+      if (state.turnHistory !== undefined) setTurnHistory(state.turnHistory);
+      if (state.globalHistory !== undefined) setGlobalHistory(state.globalHistory);
+      if (state.timeLeft !== undefined) setTimeLeft(state.timeLeft);
+      if (state.winner !== undefined) setWinner(state.winner);
+      if (state.phase !== undefined) setPhase(state.phase);
       if (state.p1Ready !== undefined) setP1Ready(state.p1Ready);
       if (state.p2Ready !== undefined) setP2Ready(state.p2Ready);
     });
@@ -193,6 +189,7 @@ export default function App() {
           movesPhase1,
           movesPhaseN,
           turnTimeLimit,
+          moveTimeLimit,
           p1Target,
           p2Target,
           currentPlayer,
@@ -248,6 +245,7 @@ export default function App() {
               movesPhase1,
               movesPhaseN,
               turnTimeLimit,
+              moveTimeLimit,
               phase: 'setup',
               p1Ready: false,
               p2Ready: false
@@ -270,7 +268,7 @@ export default function App() {
     if (player === 1) {
       if (!p1Target) return showToast('目標ページを設定してください');
       setP1Ready(true);
-      emitStateUpdate({ p1Ready: true, p1Target });
+      emitStateUpdate({ p1Ready: true });
       if (p2Ready) {
         setPhase('confirm');
         emitStateUpdate({ phase: 'confirm' });
@@ -278,7 +276,7 @@ export default function App() {
     } else {
       if (!p2Target) return showToast('目標ページを設定してください');
       setP2Ready(true);
-      emitStateUpdate({ p2Ready: true, p2Target });
+      emitStateUpdate({ p2Ready: true });
       if (p1Ready) {
         setPhase('confirm');
         emitStateUpdate({ phase: 'confirm' });
@@ -533,6 +531,7 @@ export default function App() {
       movesPhase1,
       movesPhaseN,
       turnTimeLimit,
+      moveTimeLimit,
       p1Target,
       p2Target,
       currentPlayer,
@@ -565,6 +564,7 @@ export default function App() {
         setMovesPhase1(state.movesPhase1);
         setMovesPhaseN(state.movesPhaseN);
         setTurnTimeLimit(state.turnTimeLimit);
+        setMoveTimeLimit(state.moveTimeLimit || 0);
         setP1Target(state.p1Target);
         setP2Target(state.p2Target);
         setCurrentPlayer(state.currentPlayer);
@@ -639,42 +639,38 @@ export default function App() {
             </div>
 
             <div className="space-y-3">
-              <label className="block text-sm font-bold text-gray-700">ターン制限時間</label>
+              <label className="block text-sm font-bold text-gray-700">制限時間</label>
               <select 
-                value={turnTimeLimit} 
+                value={`${turnTimeLimit > 0 ? 'turn-' : moveTimeLimit > 0 ? 'move-' : 'none-'}${turnTimeLimit || moveTimeLimit}`}
                 onChange={(e) => {
-                  const val = Number(e.target.value);
-                  setTurnTimeLimit(val);
-                  if (val > 0) setMoveTimeLimit(0);
+                  const [mode, valStr] = e.target.value.split('-');
+                  const val = Number(valStr);
+                  if (mode === 'turn') {
+                    setTurnTimeLimit(val);
+                    setMoveTimeLimit(0);
+                  } else if (mode === 'move') {
+                    setMoveTimeLimit(val);
+                    setTurnTimeLimit(0);
+                  } else {
+                    setTurnTimeLimit(0);
+                    setMoveTimeLimit(0);
+                  }
                 }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-900 bg-white"
               >
-                <option value={0}>無制限 (なし)</option>
-                <option value={15}>15秒</option>
-                <option value={30}>30秒</option>
-                <option value={60}>60秒 (1分)</option>
-                <option value={120}>120秒 (2分)</option>
+                <option value="none-0">無制限</option>
+                <option value="turn-15">ターン制限: 15秒</option>
+                <option value="turn-30">ターン制限: 30秒</option>
+                <option value="turn-60">ターン制限: 60秒</option>
+                <option value="turn-120">ターン制限: 120秒</option>
+                <option value="move-10">1移動制限: 10秒</option>
+                <option value="move-15">1移動制限: 15秒</option>
+                <option value="move-20">1移動制限: 20秒</option>
+                <option value="move-30">1移動制限: 30秒</option>
               </select>
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-sm font-bold text-gray-700">1移動制限時間</label>
-              <select 
-                value={moveTimeLimit} 
-                onChange={(e) => {
-                  const val = Number(e.target.value);
-                  setMoveTimeLimit(val);
-                  if (val > 0) setTurnTimeLimit(0);
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-900 bg-white"
-              >
-                <option value={0}>無制限 (なし)</option>
-                <option value={10}>10秒</option>
-                <option value={15}>15秒</option>
-                <option value={20}>20秒</option>
-                <option value={30}>30秒</option>
-              </select>
-              <p className="text-xs text-gray-500">時間切れでランダムなリンクに自動移動します</p>
+              <p className="text-xs text-gray-500">
+                {moveTimeLimit > 0 ? '時間切れでランダムなリンクに自動移動します' : turnTimeLimit > 0 ? '時間切れでターンが交代します' : '時間制限なしでプレイします'}
+              </p>
             </div>
 
               <button
@@ -1078,11 +1074,12 @@ export default function App() {
                        p2Ready: myPlayerNum === 2 ? false : p2Ready,
                        phase: 'setup'
                      });
-                   } else {
-                     setP1Ready(false);
-                     setP2Ready(false);
-                     setPhase('setup');
-                   }
+                    } else {
+                      setP1Ready(false);
+                      setP2Ready(false);
+                      setSetupTargetPlayer(null);
+                      setPhase('setup');
+                    }
                  }}
                  className="flex-1 py-3 text-indigo-600 hover:text-indigo-800 text-xs font-bold transition-colors bg-indigo-50 hover:bg-indigo-100 rounded-xl border border-indigo-100"
               >
@@ -1376,6 +1373,7 @@ export default function App() {
           />
         )}
         <iframe 
+          key={iframeKey}
           ref={iframeRef}
           title="Wikipedia"
           src={currentPage ? `/proxy/wiki/${encodeURIComponent(currentPage)}` : ''}
