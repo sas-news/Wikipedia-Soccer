@@ -139,9 +139,7 @@ async function fetchCategoryArticles(category: string, count: number): Promise<s
 function isMainModule(): boolean {
   const mainPath = process.argv[1];
   if (!mainPath) return false;
-  const normalizedMain = mainPath.replace(/\\/g, '/').toLowerCase();
-  const normalizedMeta = new URL(import.meta.url).pathname.replace(/\\/g, '/').toLowerCase();
-  return normalizedMeta.includes('batch-collect') || normalizedMain.includes('batch-collect');
+  return mainPath.replace(/\\/g, '/').toLowerCase().includes('batch-collect');
 }
 
 if (isMainModule()) {
