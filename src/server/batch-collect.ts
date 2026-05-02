@@ -7,11 +7,12 @@ import {
 } from './wiki-api';
 import { calculateRawScore, updatePercentiles } from './scoring';
 import { upsertArticle, getArticleCount } from './db';
+import { GENERAL_TOPICS } from './general-topics';
 import type { ArticleMeta, ArticleRecord } from '../types/difficulty';
 
 interface CollectOptions {
   count?: number;
-  mode?: 'random' | 'popular' | 'category';
+  mode?: 'random' | 'popular' | 'category' | 'general';
   category?: string;
   dryRun?: boolean;
 }
@@ -31,6 +32,9 @@ export async function collectArticles(options: CollectOptions = {}): Promise<{
     titles = await fetchPopularArticles(Math.min(count, 100));
   } else if (mode === 'category' && options.category) {
     titles = await fetchCategoryArticles(options.category, Math.min(count, 500));
+  } else if (mode === 'general') {
+    const shuffled = [...GENERAL_TOPICS].sort(() => Math.random() - 0.5);
+    titles = shuffled.slice(0, Math.min(count, shuffled.length));
   }
 
   const metas: ArticleMeta[] = [];
@@ -121,12 +125,20 @@ async function fetchCategoryArticles(category: string, count: number): Promise<s
   return fetchCategoryMembers(`Category:${category}`, count);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+function isMainModule(): boolean {
+  const mainPath = process.argv[1];
+  if (!mainPath) return false;
+  const normalizedMain = mainPath.replace(/\\/g, '/').toLowerCase();
+  const normalizedMeta = new URL(import.meta.url).pathname.replace(/\\/g, '/').toLowerCase();
+  return normalizedMeta.includes('batch-collect') || normalizedMain.includes('batch-collect');
+}
+
+if (isMainModule()) {
   const args = process.argv.slice(2);
   const countIndex = args.indexOf('--count');
   const count = countIndex >= 0 ? parseInt(args[countIndex + 1], 10) || 100 : 100;
   const modeIndex = args.indexOf('--mode');
-  const mode = (modeIndex >= 0 ? args[modeIndex + 1] : 'random') as 'random' | 'popular' | 'category';
+  const mode = (modeIndex >= 0 ? args[modeIndex + 1] : 'random') as 'random' | 'popular' | 'category' | 'general';
   const dryRun = args.includes('--dry-run');
   const categoryIndex = args.indexOf('--category');
   const category = categoryIndex >= 0 ? args[categoryIndex + 1] : undefined;

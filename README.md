@@ -25,7 +25,13 @@ npm run dev
 
 ### 初回起動時のシード
 
-初回起動時、自動的に難易度データベースに250記事程度が収集されます（バックグラウンド実行）。完了まで最大60秒程度かかります。コンソールに進捗が表示されます。
+初回起動時、自動的に難易度データベースに約130記事が収集されます（バックグラウンド実行）。完了まで2-3分かかります。コンソールに進捗が表示されます。
+
+収集内容:
+- **基礎項目（30件）**: 日本、アメリカ、地球、野球など誰でも知っている話題
+- **一般話題（80件）**: 地理・歴史・科学・芸術など百科事典の基礎的な項目を厳選
+- **人気記事（10件）**: 直近のページビュー上位記事
+- **カテゴリ別（9件）**: 科学・歴史・地理カテゴリから各3件
 
 シードをスキップする場合：
 
@@ -42,18 +48,24 @@ SKIP_DIFFICULTY_SEED=1 npm run dev
 既存のDBに追加で記事を収集する：
 
 ```bash
-# ランダム記事を100件追加
-npx tsx src/server/batch-collect.ts --count 100 --mode random
+# 基礎的な一般話題を50件追加（推奨）
+npx tsx src/server/batch-collect.ts --count 50 --mode general
 
-# 人気記事を50件追加
-npx tsx src/server/batch-collect.ts --count 50 --mode popular
+# 人気記事を30件追加
+npx tsx src/server/batch-collect.ts --count 30 --mode popular
 
 # 特定カテゴリから収集
 npx tsx src/server/batch-collect.ts --count 20 --mode category --category 科学
 
 # 書き込みテスト（実際にはDBに保存しない）
-npx tsx src/server/batch-collect.ts --count 10 --dry-run
+npx tsx src/server/batch-collect.ts --count 10 --mode general --dry-run
 ```
+
+**モードの違い**:
+- `general`: 地理・歴史・科学・芸術などの基礎的な百科事典項目を収集。**偏りが少なく最も推奨**
+- `popular`: 直近のページビュー上位記事。トレンドや芸能人に偏りやすい
+- `category`: 指定したカテゴリに属する記事を収集
+- `random`: 完全ランダム。品質・難易度のバランスが取れにくい
 
 DBファイルは `data/difficulty.db` に保存されます（.gitignore対象）。
 

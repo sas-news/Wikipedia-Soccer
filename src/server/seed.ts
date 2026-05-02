@@ -4,10 +4,10 @@ import { fetchArticleMeta, fetchBacklinks, fetchPageViews, fetchXToolsStats } fr
 import { calculateRawScore, updatePercentiles } from './scoring';
 import type { ArticleMeta, ArticleRecord } from '../types/difficulty';
 
-const SEED_COUNT_RANDOM = 10;
-const SEED_COUNT_POPULAR = 15;
-const SEED_COUNT_PER_CATEGORY = 5;
-const MAJOR_CATEGORIES = ['科学', '歴史', '地理', '人物', '文化', 'スポーツ', '技術', '社会'];
+const SEED_COUNT_GENERAL = 80;
+const SEED_COUNT_POPULAR = 10;
+const SEED_COUNT_PER_CATEGORY = 3;
+const MAJOR_CATEGORIES = ['科学', '歴史', '地理'];
 
 const EASY_ARTICLES = [
   '日本', 'アメリカ合衆国', '中国', 'イギリス', 'ドイツ',
@@ -79,21 +79,21 @@ export async function seedDatabase(): Promise<void> {
   }
 
   try {
+    console.log(`[DifficultyDB] Collecting ${SEED_COUNT_GENERAL} general articles...`);
+    const generalResult = await collectArticles({ count: SEED_COUNT_GENERAL, mode: 'general' });
+    totalCollected += generalResult.collected;
+    console.log(`[DifficultyDB] General articles: ${generalResult.collected} collected, ${generalResult.failed} failed`);
+  } catch (e) {
+    console.error('[DifficultyDB] Failed to collect general articles:', e);
+  }
+
+  try {
     console.log(`[DifficultyDB] Collecting ${SEED_COUNT_POPULAR} popular articles...`);
     const popularResult = await collectArticles({ count: SEED_COUNT_POPULAR, mode: 'popular' });
     totalCollected += popularResult.collected;
     console.log(`[DifficultyDB] Popular articles: ${popularResult.collected} collected, ${popularResult.failed} failed`);
   } catch (e) {
     console.error('[DifficultyDB] Failed to collect popular articles:', e);
-  }
-
-  try {
-    console.log(`[DifficultyDB] Collecting ${SEED_COUNT_RANDOM} random articles...`);
-    const randomResult = await collectArticles({ count: SEED_COUNT_RANDOM, mode: 'random' });
-    totalCollected += randomResult.collected;
-    console.log(`[DifficultyDB] Random articles: ${randomResult.collected} collected, ${randomResult.failed} failed`);
-  } catch (e) {
-    console.error('[DifficultyDB] Failed to collect random articles:', e);
   }
 
   for (const category of MAJOR_CATEGORIES) {
