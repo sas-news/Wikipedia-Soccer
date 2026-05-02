@@ -52,9 +52,9 @@ export async function seedDatabase(): Promise<void> {
         const pageSize = meta.pageSize || 0;
         const linkCount = meta.linkCount || xtools.linksOut || 0;
 
-        if (pageId <= 0 || pageSize <= 0 || backlinks <= 0) {
+        if (pageId <= 0 || backlinks <= 0) {
           console.warn(
-            `[DifficultyDB] Skipping invalid easy article "${title}": pageId=${pageId}, pageSize=${pageSize}, backlinks=${backlinks}`
+            `[DifficultyDB] Skipping invalid easy article "${title}": pageId=${pageId}, backlinks=${backlinks}`
           );
           continue;
         }

@@ -92,9 +92,9 @@ async function collectArticleMeta(title: string): Promise<ArticleMeta | null> {
   const pageSize = meta.pageSize || 0;
   const linkCount = meta.linkCount || xtools.linksOut || 0;
 
-  if (pageId <= 0 || pageSize <= 0 || backlinks <= 0) {
+  if (pageId <= 0 || backlinks <= 0) {
     console.warn(
-      `[Collect] Skipping invalid article "${title}": pageId=${pageId}, pageSize=${pageSize}, backlinks=${backlinks}`
+      `[Collect] Skipping invalid article "${title}": pageId=${pageId}, backlinks=${backlinks}`
     );
     return null;
   }

@@ -193,7 +193,7 @@ export function isDatabaseSeeded(): boolean {
 export function removeInvalidArticles(): number {
   const database = getDb();
   const result = database
-    .prepare("DELETE FROM articles WHERE backlinks <= 0 OR page_id <= 0 OR page_size <= 0")
+    .prepare("DELETE FROM articles WHERE backlinks <= 0 OR page_id <= 0")
     .run();
   return result.changes;
 }
