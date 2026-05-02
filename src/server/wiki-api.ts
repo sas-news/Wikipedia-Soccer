@@ -269,3 +269,59 @@ export async function fetchCategoryMembers(
 
   return (data.query?.categorymembers || []).map((m) => m.title);
 }
+
+export async function fetchOutgoingLinks(title: string, limit = 500): Promise<string[]> {
+  const cacheKey = `links:out:${encodeURIComponent(title)}`;
+  const cached = apiCache.get<string[]>(cacheKey);
+  if (cached) return cached;
+
+  const url = `${BASE_API_URL}?action=query&titles=${encodeURIComponent(title)}&prop=links&plnamespace=0&pllimit=${limit}&format=json&origin=*`;
+  const res = await fetchWithRetry(url);
+  const data = (await res.json()) as WikiApiResponse<{
+    pages: Record<string, { links?: Array<{ title: string }> }>;
+  }>;
+
+  if (data.error) {
+    throw new Error(`Wiki API error: ${data.error.code} - ${data.error.info}`);
+  }
+
+  const pages = data.query?.pages || {};
+  let results: string[] = [];
+  for (const pageId of Object.keys(pages)) {
+    const page = pages[pageId];
+    if (page && page.links) {
+      results = results.concat(page.links.map((l) => l.title).filter((t) => !t.includes(':')));
+    }
+  }
+
+  apiCache.set(cacheKey, results, CACHE_TTL_SHORT);
+  return results;
+}
+
+export async function fetchIncomingLinks(title: string, limit = 500): Promise<string[]> {
+  const cacheKey = `links:in:${encodeURIComponent(title)}`;
+  const cached = apiCache.get<string[]>(cacheKey);
+  if (cached) return cached;
+
+  const url = `${BASE_API_URL}?action=query&titles=${encodeURIComponent(title)}&prop=linkshere&lhnamespace=0&lhlimit=${limit}&format=json&origin=*`;
+  const res = await fetchWithRetry(url);
+  const data = (await res.json()) as WikiApiResponse<{
+    pages: Record<string, { linkshere?: Array<{ title: string }> }>;
+  }>;
+
+  if (data.error) {
+    throw new Error(`Wiki API error: ${data.error.code} - ${data.error.info}`);
+  }
+
+  const pages = data.query?.pages || {};
+  let results: string[] = [];
+  for (const pageId of Object.keys(pages)) {
+    const page = pages[pageId];
+    if (page && page.linkshere) {
+      results = results.concat(page.linkshere.map((l) => l.title).filter((t) => !t.includes(':')));
+    }
+  }
+
+  apiCache.set(cacheKey, results, CACHE_TTL_SHORT);
+  return results;
+}

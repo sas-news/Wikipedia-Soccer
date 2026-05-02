@@ -4,15 +4,16 @@ import {
   fetchBacklinks,
   fetchPageViews,
   fetchXToolsStats,
+  fetchOutgoingLinks,
 } from './wiki-api';
 import { calculateRawScore, updatePercentiles } from './scoring';
-import { upsertArticle, getArticleCount, articleExists } from './db';
+import { upsertArticle, getArticleCount, articleExists, getArticleByScoreRange } from './db';
 import { GENERAL_TOPICS } from './general-topics';
 import type { ArticleMeta, ArticleRecord } from '../types/difficulty';
 
 interface CollectOptions {
   count?: number;
-  mode?: 'random' | 'popular' | 'category' | 'general';
+  mode?: 'random' | 'popular' | 'category' | 'general' | 'explore';
   category?: string;
   dryRun?: boolean;
 }
@@ -36,6 +37,26 @@ export async function collectArticles(options: CollectOptions = {}): Promise<{
   } else if (mode === 'general') {
     const shuffled = [...GENERAL_TOPICS].sort(() => Math.random() - 0.5);
     titles = shuffled;
+  } else if (mode === 'explore') {
+    const seeds = getArticleByScoreRange(0.25, 1.0, 30);
+    const shuffledSeeds = seeds.sort(() => Math.random() - 0.5);
+    const exploreTitles: string[] = [];
+
+    for (const seed of shuffledSeeds.slice(0, 10)) {
+      try {
+        const links = await fetchOutgoingLinks(seed.title, 100);
+        for (const link of links) {
+          if (!exploreTitles.includes(link) && !link.includes(':')) {
+            exploreTitles.push(link);
+          }
+        }
+      } catch {
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    titles = exploreTitles.sort(() => Math.random() - 0.5);
+    console.log(`[Explore] Discovered ${titles.length} candidate articles from ${shuffledSeeds.length} seeds`);
   }
 
   const metas: ArticleMeta[] = [];
@@ -113,11 +134,30 @@ export async function collectArticles(options: CollectOptions = {}): Promise<{
     await tryCollectExtra(remaining);
   }
 
-  if ((mode === 'popular' || mode === 'category') && metas.length < count) {
+  if (mode === 'popular' && metas.length < count) {
     const extraNeeded = count - metas.length;
     console.log(`Need ${extraNeeded} more new articles. Switching to random mode for extras...`);
     const extraTitles = await fetchRandomArticles(Math.min(extraNeeded * 2, 100));
     await tryCollectExtra(extraTitles);
+  }
+
+  if (mode === 'category' && metas.length < count) {
+    const extraNeeded = count - metas.length;
+    console.log(`Need ${extraNeeded} more new articles. Switching to random mode for extras...`);
+    const extraTitles = await fetchRandomArticles(Math.min(extraNeeded * 2, 100));
+    await tryCollectExtra(extraTitles);
+  }
+
+  if (metas.length < count) {
+    const extraNeeded = count - metas.length;
+    console.log(`Target not reached. Fetching ${extraNeeded} more new articles from random pool...`);
+    const maxRandomAttempts = 15;
+    for (let attempt = 0; attempt < maxRandomAttempts && metas.length < count; attempt++) {
+      const batchSize = Math.min(500, (count - metas.length) * 3);
+      console.log(`Random fallback batch ${attempt + 1}/${maxRandomAttempts} (${batchSize} articles)...`);
+      const extraTitles = await fetchRandomArticles(batchSize);
+      await tryCollectExtra(extraTitles);
+    }
   }
 
   const rawScores = metas.map((m) => calculateRawScore(m));
@@ -207,7 +247,7 @@ if (isMainModule()) {
   const countIndex = args.indexOf('--count');
   const count = countIndex >= 0 ? parseInt(args[countIndex + 1], 10) || 100 : 100;
   const modeIndex = args.indexOf('--mode');
-  const mode = (modeIndex >= 0 ? args[modeIndex + 1] : 'random') as 'random' | 'popular' | 'category' | 'general';
+  const mode = (modeIndex >= 0 ? args[modeIndex + 1] : 'random') as 'random' | 'popular' | 'category' | 'general' | 'explore';
   const dryRun = args.includes('--dry-run');
   const categoryIndex = args.indexOf('--category');
   const category = categoryIndex >= 0 ? args[categoryIndex + 1] : undefined;
