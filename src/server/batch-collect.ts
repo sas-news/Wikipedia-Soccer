@@ -6,7 +6,7 @@ import {
   fetchXToolsStats,
 } from './wiki-api';
 import { calculateRawScore, updatePercentiles } from './scoring';
-import { upsertArticle, getArticleCount } from './db';
+import { upsertArticle, getArticleCount, articleExists } from './db';
 import { GENERAL_TOPICS } from './general-topics';
 import type { ArticleMeta, ArticleRecord } from '../types/difficulty';
 
@@ -20,6 +20,7 @@ interface CollectOptions {
 export async function collectArticles(options: CollectOptions = {}): Promise<{
   collected: number;
   failed: number;
+  skipped: number;
   articles: ArticleRecord[];
 }> {
   const { count = 100, mode = 'random', dryRun = false } = options;
@@ -34,14 +35,22 @@ export async function collectArticles(options: CollectOptions = {}): Promise<{
     titles = await fetchCategoryArticles(options.category, Math.min(count, 500));
   } else if (mode === 'general') {
     const shuffled = [...GENERAL_TOPICS].sort(() => Math.random() - 0.5);
-    titles = shuffled.slice(0, Math.min(count, shuffled.length));
+    titles = shuffled;
   }
 
   const metas: ArticleMeta[] = [];
   let failed = 0;
+  let skipped = 0;
+  let processedCount = 0;
 
   for (let i = 0; i < titles.length; i++) {
     const title = titles[i];
+
+    if (!dryRun && articleExists(title)) {
+      skipped++;
+      continue;
+    }
+
     try {
       await new Promise((r) => setTimeout(r, 2000));
       const meta = await collectArticleMeta(title);
@@ -51,13 +60,64 @@ export async function collectArticles(options: CollectOptions = {}): Promise<{
       }
       metas.push(meta);
 
-      if ((i + 1) % 10 === 0) {
-        console.log(`Collected metadata ${i + 1}/${titles.length}...`);
+      processedCount++;
+      if (processedCount % 10 === 0) {
+        console.log(`Collected metadata ${processedCount} (target: ${count})...`);
       }
+
+      if (metas.length >= count) break;
     } catch (err) {
       console.error(`Failed to collect "${title}":`, err instanceof Error ? err.message : String(err));
       failed++;
     }
+  }
+
+  async function tryCollectExtra(extraTitles: string[]) {
+    for (const title of extraTitles) {
+      if (metas.some((m) => m.title === title)) continue;
+      if (!dryRun && articleExists(title)) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        await new Promise((r) => setTimeout(r, 2000));
+        const meta = await collectArticleMeta(title);
+        if (!meta) {
+          failed++;
+          continue;
+        }
+        metas.push(meta);
+        processedCount++;
+        if (metas.length >= count) break;
+      } catch (err) {
+        console.error(`Failed to collect "${title}":`, err instanceof Error ? err.message : String(err));
+        failed++;
+      }
+    }
+  }
+
+  if (mode === 'random' && metas.length < count) {
+    const maxExtraAttempts = 5;
+    for (let attempt = 0; attempt < maxExtraAttempts && metas.length < count; attempt++) {
+      const extraNeeded = count - metas.length;
+      console.log(`Need ${extraNeeded} more new articles. Fetching extra random batch ${attempt + 1}/${maxExtraAttempts}...`);
+      const extraTitles = await fetchRandomArticles(Math.min(extraNeeded * 2, 100));
+      await tryCollectExtra(extraTitles);
+    }
+  }
+
+  if (mode === 'general' && metas.length < count) {
+    const remaining = titles.filter((t) => !metas.some((m) => m.title === t));
+    console.log(`Need ${count - metas.length} more new articles. Using remaining ${remaining.length} general topics...`);
+    await tryCollectExtra(remaining);
+  }
+
+  if ((mode === 'popular' || mode === 'category') && metas.length < count) {
+    const extraNeeded = count - metas.length;
+    console.log(`Need ${extraNeeded} more new articles. Switching to random mode for extras...`);
+    const extraTitles = await fetchRandomArticles(Math.min(extraNeeded * 2, 100));
+    await tryCollectExtra(extraTitles);
   }
 
   const rawScores = metas.map((m) => calculateRawScore(m));
@@ -76,7 +136,7 @@ export async function collectArticles(options: CollectOptions = {}): Promise<{
     }
   }
 
-  return { collected: results.length, failed, articles: results };
+  return { collected: results.length, failed, skipped, articles: results };
 }
 
 async function collectArticleMeta(title: string): Promise<ArticleMeta | null> {
@@ -159,9 +219,10 @@ if (isMainModule()) {
     .then((result) => {
       const endCount = getArticleCount();
       console.log(`\nCollection complete:`);
-      console.log(`  Collected: ${result.collected}`);
+      console.log(`  New articles: ${result.collected}`);
       console.log(`  Failed: ${result.failed}`);
-      console.log(`  DB before: ${startCount}, after: ${endCount}`);
+      console.log(`  Skipped (already exists): ${result.skipped}`);
+      console.log(`  DB before: ${startCount}, after: ${endCount} (+${endCount - startCount})`);
 
       if (result.articles.length > 0) {
         console.log('\nTop 10 by score:');

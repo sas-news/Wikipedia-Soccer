@@ -128,6 +128,14 @@ export function getArticleCount(): number {
   return result.count;
 }
 
+export function articleExists(title: string): boolean {
+  const database = getDb();
+  const result = database.prepare('SELECT 1 as exists_flag FROM articles WHERE id = @title').get({
+    title,
+  }) as { exists_flag: number } | undefined;
+  return !!result;
+}
+
 export function getScoreDistribution(buckets = 10): number[] {
   const database = getDb();
   const distribution: number[] = new Array(buckets).fill(0);

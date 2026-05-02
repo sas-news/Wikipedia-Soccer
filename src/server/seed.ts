@@ -94,7 +94,7 @@ export async function seedDatabase(): Promise<void> {
     console.log(`[DifficultyDB] Collecting ${SEED_COUNT_GENERAL} general articles...`);
     const generalResult = await collectArticles({ count: SEED_COUNT_GENERAL, mode: 'general' });
     totalCollected += generalResult.collected;
-    console.log(`[DifficultyDB] General articles: ${generalResult.collected} collected, ${generalResult.failed} failed`);
+    console.log(`[DifficultyDB] General articles: ${generalResult.collected} new, ${generalResult.failed} failed, ${generalResult.skipped} skipped`);
   } catch (e) {
     console.error('[DifficultyDB] Failed to collect general articles:', e);
   }
@@ -103,7 +103,7 @@ export async function seedDatabase(): Promise<void> {
     console.log(`[DifficultyDB] Collecting ${SEED_COUNT_POPULAR} popular articles...`);
     const popularResult = await collectArticles({ count: SEED_COUNT_POPULAR, mode: 'popular' });
     totalCollected += popularResult.collected;
-    console.log(`[DifficultyDB] Popular articles: ${popularResult.collected} collected, ${popularResult.failed} failed`);
+    console.log(`[DifficultyDB] Popular articles: ${popularResult.collected} new, ${popularResult.failed} failed, ${popularResult.skipped} skipped`);
   } catch (e) {
     console.error('[DifficultyDB] Failed to collect popular articles:', e);
   }
@@ -117,7 +117,7 @@ export async function seedDatabase(): Promise<void> {
         category,
       });
       totalCollected += catResult.collected;
-      console.log(`[DifficultyDB] Category "${category}": ${catResult.collected} collected, ${catResult.failed} failed`);
+      console.log(`[DifficultyDB] Category "${category}": ${catResult.collected} new, ${catResult.failed} failed, ${catResult.skipped} skipped`);
     } catch (e) {
       console.error(`[DifficultyDB] Failed to collect category "${category}":`, e);
     }
