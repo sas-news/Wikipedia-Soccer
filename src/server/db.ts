@@ -189,3 +189,11 @@ export function getArticlesByPreset(
 export function isDatabaseSeeded(): boolean {
   return getArticleCount() > 0;
 }
+
+export function removeInvalidArticles(): number {
+  const database = getDb();
+  const result = database
+    .prepare("DELETE FROM articles WHERE backlinks <= 0 OR page_id <= 0 OR page_size <= 0")
+    .run();
+  return result.changes;
+}

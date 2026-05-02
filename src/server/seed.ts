@@ -47,13 +47,25 @@ export async function seedDatabase(): Promise<void> {
         const backlinks = await fetchBacklinks(title).catch(() => 0);
         const pageviews = await fetchPageViews(title, 30).catch(() => 0);
         const xtools = await fetchXToolsStats(title).catch(() => ({ linksIn: 0, linksOut: 0, prose: 0 }));
+
+        const pageId = meta.pageId || 0;
+        const pageSize = meta.pageSize || 0;
+        const linkCount = meta.linkCount || xtools.linksOut || 0;
+
+        if (pageId <= 0 || pageSize <= 0 || backlinks <= 0) {
+          console.warn(
+            `[DifficultyDB] Skipping invalid easy article "${title}": pageId=${pageId}, pageSize=${pageSize}, backlinks=${backlinks}`
+          );
+          continue;
+        }
+
         easyMetas.push({
           title: meta.title,
-          pageId: meta.pageId || 0,
+          pageId,
           backlinks: backlinks || 0,
           pageviews: pageviews || 0,
-          pageSize: meta.pageSize || 0,
-          linkCount: meta.linkCount || xtools.linksOut || 0,
+          pageSize,
+          linkCount,
           categoryDepth: 0,
           lastUpdated: Date.now(),
         });

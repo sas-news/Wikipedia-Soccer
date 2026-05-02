@@ -317,32 +317,47 @@ export default function App() {
     setPhase('confirm');
   };
 
+  const fetchTrueRandom = async (): Promise<string> => {
+    const res = await fetch('/api/random');
+    const data = await res.json();
+    if (data.fallback && data.message) {
+      showToast(data.message);
+    }
+    return data.title;
+  };
+
   const fetchRandomTarget = async (
     setTarget: (target: string) => void,
     difficultyPreset?: string | null,
     customParams?: CustomDifficultyParams
   ) => {
     try {
-      let url = '/api/random';
-      const options: RequestInit = {};
+      let title: string;
 
-      if (difficultyPreset) {
-        url = `/api/random?difficulty=${encodeURIComponent(difficultyPreset)}`;
-      } else if (customParams && Object.keys(customParams).length > 0) {
-        url = '/api/difficulty/custom';
-        options.method = 'POST';
-        options.headers = { 'Content-Type': 'application/json' };
-        options.body = JSON.stringify(customParams);
+      const hasCustomParams = customParams && Object.keys(customParams).length > 0;
+      if (difficultyPreset == null || difficultyPreset === '' || (difficultyPreset === 'custom' && !hasCustomParams)) {
+        title = await fetchTrueRandom();
+      } else if (hasCustomParams) {
+        const res = await fetch('/api/difficulty/custom', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(customParams),
+        });
+        const data = await res.json();
+        if (data.fallback && data.message) {
+          showToast(data.message);
+        }
+        title = data.title;
+      } else {
+        const res = await fetch(`/api/random?difficulty=${encodeURIComponent(difficultyPreset)}`);
+        const data = await res.json();
+        if (data.fallback && data.message) {
+          showToast(data.message);
+        }
+        title = data.title;
       }
 
-      const res = await fetch(url, options);
-      const data = await res.json();
-
-      if (data.fallback && data.message) {
-        showToast(data.message);
-      }
-
-      setTarget(data.title);
+      setTarget(title);
     } catch (e) {
       showToast('ランダム記事の取得に失敗しました');
     }
@@ -360,9 +375,7 @@ export default function App() {
       if (startPageMode === 'custom' && customStartPage) {
         startPage = customStartPage;
       } else {
-        const res = await fetch('/api/random');
-        const data = await res.json();
-        startPage = data.title;
+        startPage = await fetchTrueRandom();
       }
       
       const initialTimeLeft = turnTimeLimit > 0 ? turnTimeLimit : moveTimeLimit;
@@ -952,7 +965,7 @@ const executeUndo = () => {
                         }}
                         disabled={fetchingRandom.p1}
                       />
-                      {p1DifficultyMode === 'preset' && p1DifficultyPreset === 'custom' && (
+                      {(p1DifficultyMode === 'custom' || (p1DifficultyMode === 'preset' && p1DifficultyPreset === 'custom')) && (
                         <CustomDifficultyPanel
                           onTest={(params) => {
                             setP1CustomParams(params);
@@ -1047,7 +1060,7 @@ const executeUndo = () => {
                         }}
                         disabled={fetchingRandom.p2}
                       />
-                      {p2DifficultyMode === 'preset' && p2DifficultyPreset === 'custom' && (
+                      {(p2DifficultyMode === 'custom' || (p2DifficultyMode === 'preset' && p2DifficultyPreset === 'custom')) && (
                         <CustomDifficultyPanel
                           onTest={(params) => {
                             setP2CustomParams(params);

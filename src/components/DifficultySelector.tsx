@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Dices, Star, Info } from 'lucide-react';
+import { Dices, Star, Info, Settings } from 'lucide-react';
 import type { DifficultyPreset } from '../types/difficulty';
 
 interface DifficultySelectorProps {
@@ -57,6 +57,19 @@ export default function DifficultySelector({
         >
           <Dices className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold">完全ランダム</span>
+        </button>
+
+        <button
+          onClick={() => onSelect('custom')}
+          disabled={disabled}
+          className={`flex flex-col items-center p-3 rounded-xl border transition-all ${
+            selectedPreset === 'custom'
+              ? 'bg-gray-900 border-gray-900 text-white shadow-lg'
+              : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+          } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+        >
+          <Settings className="w-5 h-5 mb-1" />
+          <span className="text-xs font-bold">カスタム</span>
         </button>
 
         {presets.map((preset) => (

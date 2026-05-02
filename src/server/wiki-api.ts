@@ -159,6 +159,7 @@ export async function fetchArticleMeta(titles: string[]): Promise<Partial<Articl
   for (const pageId of Object.keys(pages)) {
     const page = pages[pageId];
     if (!page || page.title === undefined) continue;
+    if (page.pageid === undefined || page.pageid <= 0 || 'missing' in page) continue;
 
     const meta: Partial<ArticleMeta> = {
       title: page.title,
