@@ -61,7 +61,7 @@ router.post('/difficulty/custom', async (req, res) => {
     const articles = getArticleByScoreRange(minScore, maxScore, 50);
 
     if (articles.length === 0) {
-      const fallback = await fetchRandomArticles(1);
+      const fallback = await fetchRandomArticles(1, { noCache: true });
       const response: RandomArticleResponse = {
         title: fallback[0],
         fallback: true,
@@ -87,12 +87,12 @@ export async function handleRandomWithDifficulty(
   difficultyParam: string | undefined
 ): Promise<RandomArticleResponse> {
   if (!difficultyParam) {
-    const fallback = await fetchRandomArticles(1);
+    const fallback = await fetchRandomArticles(1, { noCache: true });
     return { title: fallback[0] };
   }
 
   if (!validatePresetId(difficultyParam)) {
-    const fallback = await fetchRandomArticles(1);
+    const fallback = await fetchRandomArticles(1, { noCache: true });
     return {
       title: fallback[0],
       fallback: true,
@@ -102,12 +102,12 @@ export async function handleRandomWithDifficulty(
 
   const preset = getPresetById(difficultyParam);
   if (!preset) {
-    const fallback = await fetchRandomArticles(1);
+    const fallback = await fetchRandomArticles(1, { noCache: true });
     return { title: fallback[0], fallback: true };
   }
 
   if (!isDatabaseSeeded()) {
-    const fallback = await fetchRandomArticles(1);
+    const fallback = await fetchRandomArticles(1, { noCache: true });
     return {
       title: fallback[0],
       difficulty: difficultyParam,
@@ -120,7 +120,7 @@ export async function handleRandomWithDifficulty(
   const articles = getArticleByScoreRange(minScore, maxScore, 10);
 
   if (articles.length === 0) {
-    const fallback = await fetchRandomArticles(1);
+    const fallback = await fetchRandomArticles(1, { noCache: true });
     return {
       title: fallback[0],
       difficulty: difficultyParam,

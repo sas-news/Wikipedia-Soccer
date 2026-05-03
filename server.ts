@@ -128,7 +128,7 @@ async function startServer() {
       
       if (!response.ok) {
         try {
-          const randomRes = await fetch('https://ja.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=1&format=json');
+          const randomRes = await fetch(`https://ja.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=1&format=json&_cb=${Date.now()}`);
           const randomData = await randomRes.json();
           const fallbackTitle = randomData.query.random[0].title;
           return res.redirect(`/proxy/wiki/${encodeURIComponent(fallbackTitle)}`);

@@ -1,6 +1,16 @@
+import { randomInt } from 'node:crypto';
 import type { ArticleMeta } from '../types/difficulty';
 
 const USER_AGENT = 'WikipediaSoccerGame/1.0 (DifficultyScorer)';
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const array = [...arr];
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = randomInt(0, i + 1);
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
 
 class SimpleCache {
   private cache = new Map<string, { value: unknown; expiry: number }>();
@@ -120,12 +130,22 @@ async function fetchWithRetry(
   throw new Error(`Failed to fetch ${url} after ${retries} retries`);
 }
 
-export async function fetchRandomArticles(count = 1): Promise<string[]> {
+export async function fetchRandomArticles(
+  count = 1,
+  options?: { noCache?: boolean }
+): Promise<string[]> {
+  const noCache = options?.noCache ?? false;
   const cacheKey = `random:${count}`;
-  const cached = apiCache.get<string[]>(cacheKey);
-  if (cached) return cached;
 
-  const url = `${BASE_API_URL}?action=query&list=random&rnnamespace=0&rnlimit=${count}&format=json&origin=*`;
+  if (!noCache) {
+    const cached = apiCache.get<string[]>(cacheKey);
+    if (cached) return cached;
+  }
+
+  const fetchCount = noCache ? Math.max(count, 20) : count;
+  const cacheBuster = noCache ? `&_cb=${Date.now()}` : '';
+  const url = `${BASE_API_URL}?action=query&list=random&rnnamespace=0&rnlimit=${fetchCount}&format=json&origin=*${cacheBuster}`;
+
   const res = await fetchWithRetry(url);
   const data = (await res.json()) as WikiApiResponse<{ random: RandomPage[] }>;
 
@@ -133,8 +153,15 @@ export async function fetchRandomArticles(count = 1): Promise<string[]> {
     throw new Error(`Wiki API error: ${data.error.code} - ${data.error.info}`);
   }
 
-  const result = (data.query?.random || []).map((p) => p.title);
-  apiCache.set(cacheKey, result, CACHE_TTL_SHORT);
+  let result = (data.query?.random || []).map((p) => p.title);
+
+  if (noCache) {
+    result = shuffleArray(result).slice(0, count);
+  }
+
+  if (!noCache) {
+    apiCache.set(cacheKey, result, CACHE_TTL_SHORT);
+  }
   return result;
 }
 
