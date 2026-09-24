@@ -17,7 +17,7 @@ async function startServer() {
   const app = express();
   app.use(express.json());
 
-  const PORT = 3011;
+  const PORT = Number(process.env.PORT) || 3011;
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: { origin: '*' }
@@ -329,6 +329,9 @@ async function startServer() {
 
   // Associative pair-draw API
   app.use('/api', matchRoutes);
+
+  // Render etc. のヘルスチェック用
+  app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {

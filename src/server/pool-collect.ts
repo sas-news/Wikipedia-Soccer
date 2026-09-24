@@ -219,7 +219,7 @@ async function main() {
   const fresh = args.includes('--fresh');
   const limitIdx = args.indexOf('--limit');
   const concIdx = args.indexOf('--concurrency');
-  const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) : 0;
+  const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) : Number(process.env.POOL_LIMIT) || 0;
   const concurrency = concIdx >= 0 ? Number(args[concIdx + 1]) : DEFAULT_CONCURRENCY;
 
   initPoolSchema();
