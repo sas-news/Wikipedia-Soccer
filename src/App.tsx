@@ -114,6 +114,11 @@ export default function App() {
       if (state.moveTimeLimit !== undefined) setMoveTimeLimit(state.moveTimeLimit);
       if (state.p1Target !== undefined && myPlayerNum !== 1) setP1Target(state.p1Target);
       if (state.p2Target !== undefined && myPlayerNum !== 2) setP2Target(state.p2Target);
+      // ペア抽選は両者のゴールの共有更新として扱い、P2側のクライアントにも適用する
+      if (state.pairTargets !== undefined) {
+        setP1Target(state.pairTargets.a);
+        setP2Target(state.pairTargets.b);
+      }
       if (state.currentPlayer !== undefined) setCurrentPlayer(state.currentPlayer);
       if (state.turnCount !== undefined) setTurnCount(state.turnCount);
       if (state.movesMade !== undefined) setMovesMade(state.movesMade);
@@ -327,7 +332,7 @@ export default function App() {
       setPairStart(data.start ? { a: data.a, b: data.b, start: data.start, band: data.band, difficulty: data.difficulty } : null);
       if (data.fallback && data.message) showToast(data.message);
       if (isOnline && socket && roomId) {
-        socket.emit('sync_state', { roomId, state: { p1Target: data.a, p2Target: data.b } });
+        socket.emit('sync_state', { roomId, state: { pairTargets: { a: data.a, b: data.b } } });
       }
     } catch {
       showToast('ペアの取得に失敗しました');
