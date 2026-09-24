@@ -31,6 +31,16 @@ const BAND_MAP: Record<string, PairBand> = {
   very_hard: 'hard',
 };
 
+/** difficultyプリセットID → 両端の最小30日PV（単語の有名度フロア）
+ *  帯は関係の遠近だけを見るため、読みにくい語が混ざらないよう別軸で絞る */
+const FAME_MAP: Record<string, number> = {
+  very_easy: 2700, // 資格記事の上位約25%
+  easy: 2700,
+  medium: 1200,    // 上位約50%
+  hard: 0,
+  very_hard: 0,
+};
+
 function resolveBand(difficulty?: string): PairBand[] {
   if (!difficulty) return ['ideal'];
   if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'weak') {
@@ -42,9 +52,15 @@ function resolveBand(difficulty?: string): PairBand[] {
   return band === 'hard' ? ['hard', 'ideal'] : ['ideal'];
 }
 
-function drawB(a: string, bands: PairBand[]): AssocPair | undefined {
+function resolveFame(difficulty?: string): number {
+  if (!difficulty) return 0;
+  if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'weak') return 0;
+  return FAME_MAP[difficulty] ?? 0;
+}
+
+function drawB(a: string, bands: PairBand[], minBPv = 0): AssocPair | undefined {
   for (const band of bands) {
-    const pairs = getPairsFrom(a, band);
+    const pairs = getPairsFrom(a, band, minBPv);
     if (pairs.length > 0) {
       return pairs[Math.floor(Math.random() * pairs.length)];
     }
@@ -65,6 +81,7 @@ router.get('/match', async (req, res) => {
     const difficulty = req.query.difficulty as string | undefined;
     const fixedA = req.query.a as string | undefined;
     const bands = resolveBand(difficulty);
+    const minPv = resolveFame(difficulty);
 
     const stats = getPoolStats();
     if (stats.eligible === 0 || stats.pairs === 0) {
@@ -94,10 +111,10 @@ router.get('/match', async (req, res) => {
     // A未定: 帯に合うBを持つAを抽選（最大30回試行）
     let pair: AssocPair | undefined;
     if (!a) {
-      const elig = getEligibleTitles();
+      const elig = getEligibleTitles(minPv);
       for (let i = 0; i < 30; i++) {
         const cand = elig[Math.floor(Math.random() * elig.length)];
-        const p = drawB(cand, bands);
+        const p = drawB(cand, bands, minPv);
         if (p) {
           a = cand;
           pair = p;
@@ -105,7 +122,8 @@ router.get('/match', async (req, res) => {
         }
       }
     } else {
-      pair = drawB(a, bands);
+      // 固定Aはユーザー指定のためA側フロアなし。Bには難易度のフロアを適用
+      pair = drawB(a, bands, minPv);
     }
 
     if (!a || !pair) {
@@ -120,6 +138,7 @@ router.get('/match', async (req, res) => {
       a: pair.a,
       b: pair.b,
       band: pair.band,
+      difficulty: difficulty ?? 'medium',
       start: symmetricStart(pair.a, pair.b),
       stats: {
         bend: [pair.bendAb, pair.bendBa],

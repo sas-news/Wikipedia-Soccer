@@ -190,11 +190,11 @@ export function finalizePoolDegrees(): void {
   `);
 }
 
-export function getEligibleTitles(): string[] {
+export function getEligibleTitles(minPageviews = 0): string[] {
   const db = getDb();
   const rows = db
-    .prepare('SELECT title FROM pool_articles WHERE eligible = 1')
-    .all() as Array<{ title: string }>;
+    .prepare('SELECT title FROM pool_articles WHERE eligible = 1 AND pageviews >= ?')
+    .all(minPageviews) as Array<{ title: string }>;
   return rows.map((r) => r.title);
 }
 
@@ -248,11 +248,19 @@ export function clearAssocPairs(): void {
 }
 
 /** A起点で指定帯のペアを全件取得 */
-export function getPairsFrom(a: string, band: PairBand): AssocPair[] {
+export function getPairsFrom(a: string, band: PairBand, minBPageviews = 0): AssocPair[] {
   const db = getDb();
-  const rows = db
-    .prepare('SELECT * FROM assoc_pairs WHERE a = ? AND band = ?')
-    .all(a, band) as any[];
+  const rows = minBPageviews > 0
+    ? db
+        .prepare(
+          `SELECT ap.* FROM assoc_pairs ap
+           JOIN pool_articles pb ON pb.title = ap.b AND pb.pageviews >= ?
+           WHERE ap.a = ? AND ap.band = ?`
+        )
+        .all(minBPageviews, a, band) as any[]
+    : db
+        .prepare('SELECT * FROM assoc_pairs WHERE a = ? AND band = ?')
+        .all(a, band) as any[];
   return rows.map(rowToPair);
 }
 

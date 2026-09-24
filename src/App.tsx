@@ -70,7 +70,7 @@ export default function App() {
   const [isStarting, setIsStarting] = useState(false);
   const [pairDifficulty, setPairDifficulty] = useState('medium');
   const [fetchingPair, setFetchingPair] = useState(false);
-  const [pairStart, setPairStart] = useState<{ a: string; b: string; start: string; band: string } | null>(null);
+  const [pairStart, setPairStart] = useState<{ a: string; b: string; start: string; band: string; difficulty: string } | null>(null);
 
   // Game State
   const [currentPlayer, setCurrentPlayer] = useState<1 | 2>(1);
@@ -378,7 +378,7 @@ export default function App() {
       }
       setP1Target(data.a);
       setP2Target(data.b);
-      setPairStart(data.start ? { a: data.a, b: data.b, start: data.start, band: data.band } : null);
+      setPairStart(data.start ? { a: data.a, b: data.b, start: data.start, band: data.band, difficulty: data.difficulty } : null);
       if (data.fallback && data.message) showToast(data.message);
       if (isOnline && socket && roomId) {
         socket.emit('sync_state', { roomId, state: { p1Target: data.a, p2Target: data.b } });
@@ -933,7 +933,8 @@ const executeUndo = () => {
                 </div>
                 {pairStart && (
                   <p className="text-xs text-purple-600">
-                    {pairStart.band === 'hard' ? '難しい' : 'ちょうど良い'}帯で抽選 / 対称スタート候補: {pairStart.start}（ランダム開始時に使用）
+                    {pairStart.difficulty === 'easy' ? 'やさしい' : pairStart.difficulty === 'hard' ? '難しい' : 'ちょうど良い'}帯で抽選
+                    {pairStart.difficulty === 'hard' && pairStart.band === 'ideal' ? '（hard候補なし→ちょうど良い帯に退避）' : ''} / 対称スタート候補: {pairStart.start}（ランダム開始時に使用）
                   </p>
                 )}
               </div>
