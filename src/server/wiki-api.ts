@@ -55,7 +55,8 @@ interface RandomPage {
 interface PageInfo {
   pageid: number;
   title: string;
-  size: number;
+  /** MediaWiki API が返すページサイズフィールド名は `length` */
+  length: number;
   pageprops?: Record<string, string>;
 }
 
@@ -191,7 +192,7 @@ export async function fetchArticleMeta(titles: string[]): Promise<Partial<Articl
     const meta: Partial<ArticleMeta> = {
       title: page.title,
       pageId: page.pageid,
-      pageSize: page.size || 0,
+      pageSize: page.length || 0,
       linkCount: page.links?.length || 0,
     };
 

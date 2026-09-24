@@ -10,6 +10,7 @@ import {
   getArticlesByPreset,
 } from '../db';
 import { fetchRandomArticles } from '../wiki-api';
+import { isWithinCustomRange, calculateCustomScore } from '../scoring';
 import type { RandomArticleResponse, CustomDifficultyParams } from '../../types/difficulty';
 
 const router = Router();
@@ -56,26 +57,29 @@ router.post('/difficulty/custom', async (req, res) => {
       return;
     }
 
-    const minScore = 0;
-    const maxScore = 1;
-    const articles = getArticleByScoreRange(minScore, maxScore, 50);
+    // 全件からカスタムパラメータの範囲条件でフィルタ
+    const articles = getArticleByScoreRange(0, 1, 500);
+    const matched = articles.filter((a) => isWithinCustomRange(a, params));
 
-    if (articles.length === 0) {
+    if (matched.length === 0) {
       const fallback = await fetchRandomArticles(1, { noCache: true });
       const response: RandomArticleResponse = {
         title: fallback[0],
         fallback: true,
-        message: '難易度データベースが空のため、完全ランダムな記事を返しています。',
+        message:
+          articles.length === 0
+            ? '難易度データベースが空のため、完全ランダムな記事を返しています。'
+            : '指定条件に合う記事がプールに無いため、完全ランダムな記事を返しています。',
       };
       res.json(response);
       return;
     }
 
-    const article = articles[Math.floor(Math.random() * articles.length)];
+    const article = matched[Math.floor(Math.random() * matched.length)];
     res.json({
       title: article.title,
       params,
-      score: article.normalizedScore,
+      score: calculateCustomScore(article, params),
     });
   } catch (e) {
     console.error('Custom difficulty error:', e);

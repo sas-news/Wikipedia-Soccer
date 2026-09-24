@@ -68,6 +68,9 @@ export default function App() {
   const [p2CustomParams, setP2CustomParams] = useState<CustomDifficultyParams | undefined>(undefined);
   const [fetchingRandom, setFetchingRandom] = useState<{ p1: boolean; p2: boolean }>({ p1: false, p2: false });
   const [isStarting, setIsStarting] = useState(false);
+  const [pairDifficulty, setPairDifficulty] = useState('medium');
+  const [fetchingPair, setFetchingPair] = useState(false);
+  const [pairStart, setPairStart] = useState<{ a: string; b: string; start: string } | null>(null);
 
   // Game State
   const [currentPlayer, setCurrentPlayer] = useState<1 | 2>(1);
@@ -363,6 +366,30 @@ export default function App() {
     }
   };
 
+  // 連想ペア出題: /api/match で両者のゴールをまとめて抽選
+  const fetchPairTargets = async () => {
+    setFetchingPair(true);
+    try {
+      const res = await fetch(`/api/match?difficulty=${encodeURIComponent(pairDifficulty)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'ペアの取得に失敗しました');
+        return;
+      }
+      setP1Target(data.a);
+      setP2Target(data.b);
+      setPairStart(data.start ? { a: data.a, b: data.b, start: data.start } : null);
+      if (data.fallback && data.message) showToast(data.message);
+      if (isOnline && socket && roomId) {
+        socket.emit('sync_state', { roomId, state: { p1Target: data.a, p2Target: data.b } });
+      }
+    } catch {
+      showToast('ペアの取得に失敗しました');
+    } finally {
+      setFetchingPair(false);
+    }
+  };
+
   const startGame = async () => {
     if (!p1Target || !p2Target) {
       showToast('目標ページを設定してください');
@@ -374,6 +401,8 @@ export default function App() {
       let startPage = '';
       if (startPageMode === 'custom' && customStartPage) {
         startPage = customStartPage;
+      } else if (pairStart && pairStart.a === p1Target && pairStart.b === p2Target) {
+        startPage = pairStart.start;
       } else {
         startPage = await fetchTrueRandom();
       }
@@ -879,6 +908,36 @@ const executeUndo = () => {
               <AlertCircle className="w-5 h-5 mb-2 inline-block mr-1" />
               対戦相手には画面が見えないようにしてください！
             </div>
+
+            {isP1 && (
+              <div className="p-4 rounded-xl border border-purple-200 bg-purple-50 space-y-2">
+                <label className="block text-sm font-bold text-purple-700">ペアで出題（連想距離が丁度良い組み合わせ）</label>
+                <div className="flex gap-2">
+                  <select
+                    value={pairDifficulty}
+                    onChange={(e) => setPairDifficulty(e.target.value)}
+                    className="flex-1 px-2 py-2 border border-purple-300 rounded-lg text-sm bg-white font-medium"
+                  >
+                    <option value="easy">やさしい</option>
+                    <option value="medium">ちょうど良い</option>
+                    <option value="hard">難しい（遠いが届く）</option>
+                  </select>
+                  <button
+                    onClick={fetchPairTargets}
+                    disabled={fetchingPair}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg text-sm disabled:opacity-50 flex items-center gap-1"
+                  >
+                    {fetchingPair ? <Loader2 className="w-4 h-4 animate-spin" /> : <Dices className="w-4 h-4" />}
+                    抽選
+                  </button>
+                </div>
+                {pairStart && (
+                  <p className="text-xs text-purple-600">
+                    対称スタート候補: {pairStart.start}（ランダム開始時に使用）
+                  </p>
+                )}
+              </div>
+            )}
 
             {showLocalTabs && (
               <div className="flex gap-2">
