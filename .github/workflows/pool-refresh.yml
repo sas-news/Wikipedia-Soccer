@@ -25,8 +25,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 前回コミット分のDBを展開。旧難易度テーブル(articles)のスコアを引き継ぐため必須
-      # （--fresh はプール系テーブルのみ削除し articles は保持する）
+      # 前回コミット分のDBを展開して差分収集に備える
       - name: Restore existing DB
         run: |
           if [ -f data/difficulty.db.gz ]; then
@@ -41,15 +40,9 @@ jobs:
       - name: Precompute associative pairs
         run: npx tsx src/server/assoc.ts
 
-      # アーカイブ無しの初回ビルドでは articles が空なので、旧難易度APIがフォールバック
-      # しないようシードする（既にシード済みならスキップされる）
-      - name: Seed scoring table if empty
-        run: npx tsx -e "import('./src/server/seed').then(m => m.seedDatabase()).catch(e => { console.error(e); process.exit(1) })"
-
-      # seedDatabase は収集失敗を握り潰して正常終了するため、実際に行が入ったか検証。
-      # 空のままアーカイブを公開しないよう、0件ならジョブを落とす
-      - name: Verify scoring table populated
-        run: npx tsx -e "import('./src/server/db').then(m => { m.initDatabase(); const n = m.getArticleCount(); console.log('articles:', n); if (n === 0) process.exit(1) })"
+      # 空のままアーカイブを公開しないよう、プールが0件ならジョブを落とす
+      - name: Verify pool populated
+        run: npx tsx -e "import('./src/server/db').then(m => { m.initDatabase(); const db = m.getDb(); const n = db.prepare('SELECT COUNT(*) c FROM pool_articles').get().c; const p = db.prepare('SELECT COUNT(*) c FROM assoc_pairs').get().c; console.log('pool_articles:', n, 'assoc_pairs:', p); if (n === 0 || p === 0) process.exit(1) })"
 
       - name: Compress DB
         run: gzip -kf data/difficulty.db

@@ -4,16 +4,14 @@ import path from 'path';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { initDatabase } from './src/server/db';
-import { seedDatabase } from './src/server/seed';
 import { initPoolSchema } from './src/server/pool';
-import difficultyRoutes, { handleRandomWithDifficulty } from './src/server/routes/difficulty';
+import { fetchRandomArticles } from './src/server/wiki-api';
 import matchRoutes from './src/server/routes/match';
 import poolRoutes from './src/server/routes/pool';
 
 async function startServer() {
   initDatabase();
   initPoolSchema();
-  seedDatabase().catch((e) => console.error('[DifficultyDB] Background seed error:', e));
 
   const app = express();
   app.use(express.json());
@@ -314,19 +312,15 @@ async function startServer() {
     }
   });
 
-  // API to get a random article (excluding special pages/categories)
-  app.get('/api/random', async (req, res) => {
+  // スタートページ用の完全ランダム記事（難易度指定は廃止：出題は /api/match に一本化）
+  app.get('/api/random', async (_req, res) => {
     try {
-      const difficulty = req.query.difficulty as string | undefined;
-      const result = await handleRandomWithDifficulty(difficulty);
-      res.json(result);
+      const titles = await fetchRandomArticles(1, { noCache: true });
+      res.json({ title: titles[0] });
     } catch (e) {
       res.status(500).json({ error: 'Failed to fetch random page' });
     }
   });
-
-  // Difficulty-related API routes
-  app.use('/api', difficultyRoutes);
 
   // Associative pair-draw API
   app.use('/api', matchRoutes);
