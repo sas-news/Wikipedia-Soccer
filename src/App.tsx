@@ -249,17 +249,24 @@ export default function App() {
     const newSocket = io();
     setSocket(newSocket);
 
-    newSocket.emit('join_room', roomId);
+    // サーバー側と同じ正規化を行い、以後のemitは正規化後のIDで送る
+    const rid = roomId.trim().slice(0, 64);
+    setRoomId(rid);
+    // 自動再接続（transport復帰）でも部屋に入り直す。初回connectもここで送られる
+    newSocket.on('connect', () => {
+      newSocket.emit('join_room', rid);
+    });
     newSocket.on('room_full', () => {
       showToast('ルームが満員です');
       newSocket.disconnect();
       setSocket(null);
       setIsJoining(false);
     });
-    newSocket.on('joined', (data: { playerNum: 1 | 2 | 'spectator' }) => {
+    newSocket.on('joined', (data: { playerNum: 1 | 2 | 'spectator'; roomId?: string }) => {
       setMyPlayerNum(data.playerNum);
       setIsOnline(true);
       setIsJoining(false);
+      if (data.roomId) setRoomId(data.roomId);
 
       if (data.playerNum === 'spectator') {
         setPhase('online_waiting');
@@ -272,9 +279,10 @@ export default function App() {
         setPhase('setup');
         setP1Ready(false);
         setP2Ready(false);
+        setPeerLeft(false);
         if (data.playerNum === 1) {
           newSocket.emit('sync_state', {
-            roomId,
+            roomId: rid,
             state: {
               startPageMode,
               customStartPage,
@@ -1559,7 +1567,7 @@ emitStateUpdate({
                    setP1Ready(false);
                    setP2Ready(false);
                    setPhase('setup');
-                   emitStateUpdate({ p1Target: '', p2Target: '', phase: 'setup', p1Ready: false, p2Ready: false });
+                   emitStateUpdate({ p1Target: '', p2Target: '', pairTargets: { a: '', b: '' }, phase: 'setup', p1Ready: false, p2Ready: false });
                 } else {
                    setPhase('settings');
                    setP1Target('');

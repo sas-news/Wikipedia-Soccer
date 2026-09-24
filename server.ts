@@ -31,12 +31,19 @@ async function startServer() {
   const roomSuspended = new Set<string>();
   const socketRoles = new Map<string, { roomId: string; role: 1 | 2 | 'spectator' }>();
   const explicitQuit = new Set<string>();
+  // プレイヤー席が回線断で空いている部屋（フェーズに関係なく復帰を検知するため）
+  const roomPeerGone = new Set<string>();
 
   io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
     const inRoom = (roomId: unknown): roomId is string =>
       typeof roomId === 'string' && socket.rooms.has(roomId);
+    // 状態を変更するイベントはプレイヤー席のみ許可（観戦者は操作不可）
+    const playerInRoom = (roomId: unknown): roomId is string => {
+      const info = socketRoles.get(socket.id);
+      return inRoom(roomId) && info?.roomId === roomId && info.role !== 'spectator';
+    };
 
     socket.on('join_room', (roomId: string) => {
       if (socketRoles.has(socket.id)) return; // 二重参加は無視
@@ -63,16 +70,18 @@ async function startServer() {
 
       socket.join(roomId);
       socketRoles.set(socket.id, { roomId, role: playerNum });
-      socket.emit('joined', { playerNum });
+      socket.emit('joined', { playerNum, roomId });
 
       const state = roomStates.get(roomId);
       // 開始済みフェーズへの復帰は game_ready を発火せず状態同期だけにする
       const inPlay = state?.phase === 'playing' || state?.phase === 'won' || state?.phase === 'confirm';
-      if (seats.p1 && seats.p2 && !inPlay) {
+      if (playerNum !== 'spectator' && seats.p1 && seats.p2 && !inPlay) {
         // 両席が埋まった時だけ開始（観戦者参加では発火しない）
         io.to(roomId).emit('game_ready');
-      } else if (inPlay && playerNum !== 'spectator') {
-        // 対戦中の空席への復帰 → 相手に復帰を通知
+      }
+      // 回線断で空いたプレイヤー席が再び埋まった → フェーズ問わず相手に復帰を通知
+      if (playerNum !== 'spectator' && roomPeerGone.has(roomId)) {
+        roomPeerGone.delete(roomId);
         socket.to(roomId).emit('peer_rejoined');
       }
       if (state) socket.emit('sync_state', state);
@@ -81,15 +90,17 @@ async function startServer() {
       if (roomSuspended.has(roomId)) socket.emit('suspend');
     });
 
-    // 明示的な退出（保存して中断等）: 相手をタイトルへ戻す
+    // 明示的な退出（保存して中断等）: 相手をタイトルへ戻す。観戦者の退出は通知しない
     socket.on('leave_room', (data) => {
       explicitQuit.add(socket.id);
-      const roomId = socketRoles.get(socket.id)?.roomId ?? data?.roomId;
+      const info = socketRoles.get(socket.id);
+      if (info?.role === 'spectator') return;
+      const roomId = info?.roomId ?? data?.roomId;
       if (roomId) socket.to(roomId).emit('player_disconnected', socket.id);
     });
 
     socket.on('sync_state', (data) => {
-      if (!data || !inRoom(data.roomId)) return;
+      if (!data || !playerInRoom(data.roomId)) return;
       // 部分更新をマージして保持: 途中参加者・復帰者に完全な状態を届けるため
       const prev = roomStates.get(data.roomId) || {};
       roomStates.set(data.roomId, { ...prev, ...(data.state || {}) });
@@ -97,44 +108,44 @@ async function startServer() {
     });
 
     socket.on('sync_scroll', (data) => {
-      if (!inRoom(data?.roomId)) return;
+      if (!playerInRoom(data?.roomId)) return;
       socket.to(data.roomId).emit('sync_scroll', data);
     });
 
     socket.on('sync_cursor', (data) => {
-      if (!inRoom(data?.roomId)) return;
+      if (!playerInRoom(data?.roomId)) return;
       socket.to(data.roomId).emit('sync_cursor', data);
     });
 
     socket.on('suspend', (data) => {
-      if (!inRoom(data?.roomId)) return;
+      if (!playerInRoom(data?.roomId)) return;
       roomSuspended.add(data.roomId);
       socket.to(data.roomId).emit('suspend');
     });
 
     socket.on('resume', (data) => {
-      if (!inRoom(data?.roomId)) return;
+      if (!playerInRoom(data?.roomId)) return;
       roomSuspended.delete(data.roomId);
       socket.to(data.roomId).emit('resume');
     });
 
     socket.on('undo_request', (data) => {
-      if (!inRoom(data?.roomId)) return;
+      if (!playerInRoom(data?.roomId)) return;
       socket.to(data.roomId).emit('undo_request', { fromPlayer: data.fromPlayer });
     });
 
     socket.on('undo_accept', (data) => {
-      if (!inRoom(data?.roomId)) return;
+      if (!playerInRoom(data?.roomId)) return;
       socket.to(data.roomId).emit('undo_accept');
     });
 
     socket.on('undo_deny', (data) => {
-      if (!inRoom(data?.roomId)) return;
+      if (!playerInRoom(data?.roomId)) return;
       socket.to(data.roomId).emit('undo_deny');
     });
 
     socket.on('sync_record', (data) => {
-      if (!data || !inRoom(data.roomId)) return;
+      if (!data || !playerInRoom(data.roomId)) return;
       const records = roomRecords.get(data.roomId) || [];
       records.unshift(data.record);
       roomRecords.set(data.roomId, records.slice(0, 50));
@@ -154,6 +165,7 @@ async function startServer() {
       }
       // プレイヤーの切断は「復帰待ち」を通知（観戦者の出入りは何も送らない）
       if (role !== 'spectator' && !explicitQuit.has(socket.id)) {
+        roomPeerGone.add(roomId);
         socket.to(roomId).emit('peer_left');
       }
       explicitQuit.delete(socket.id);
@@ -164,6 +176,7 @@ async function startServer() {
         roomStates.delete(roomId);
         roomRecords.delete(roomId);
         roomSuspended.delete(roomId);
+        roomPeerGone.delete(roomId);
       }
     });
 
