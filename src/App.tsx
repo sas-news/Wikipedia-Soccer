@@ -70,7 +70,7 @@ export default function App() {
   const [isStarting, setIsStarting] = useState(false);
   const [pairDifficulty, setPairDifficulty] = useState('medium');
   const [fetchingPair, setFetchingPair] = useState(false);
-  const [pairStart, setPairStart] = useState<{ a: string; b: string; start: string } | null>(null);
+  const [pairStart, setPairStart] = useState<{ a: string; b: string; start: string; band: string } | null>(null);
 
   // Game State
   const [currentPlayer, setCurrentPlayer] = useState<1 | 2>(1);
@@ -378,7 +378,7 @@ export default function App() {
       }
       setP1Target(data.a);
       setP2Target(data.b);
-      setPairStart(data.start ? { a: data.a, b: data.b, start: data.start } : null);
+      setPairStart(data.start ? { a: data.a, b: data.b, start: data.start, band: data.band } : null);
       if (data.fallback && data.message) showToast(data.message);
       if (isOnline && socket && roomId) {
         socket.emit('sync_state', { roomId, state: { p1Target: data.a, p2Target: data.b } });
@@ -859,7 +859,7 @@ const executeUndo = () => {
               onClick={() => setPhase('inspector')}
               className="w-full mt-3 py-3 px-4 bg-white border-2 border-gray-200 text-gray-700 font-bold rounded-xl shadow-sm hover:bg-gray-50 flex items-center justify-center gap-2 transition-colors"
             >
-              難易度データベース内訳を見る
+              ゴールプール内訳を見る
             </button>
 
             {localStorage.getItem('wiki_soccer_past_records') && (
@@ -933,7 +933,7 @@ const executeUndo = () => {
                 </div>
                 {pairStart && (
                   <p className="text-xs text-purple-600">
-                    対称スタート候補: {pairStart.start}（ランダム開始時に使用）
+                    {pairStart.band === 'hard' ? '難しい' : 'ちょうど良い'}帯で抽選 / 対称スタート候補: {pairStart.start}（ランダム開始時に使用）
                   </p>
                 )}
               </div>

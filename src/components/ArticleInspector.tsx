@@ -1,64 +1,105 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Search, BarChart3 } from 'lucide-react';
+import { ArrowLeft, Search, BarChart3, ChevronDown, ChevronRight } from 'lucide-react';
 
-interface Article {
-  title: string;
-  normalized_score: number;
-  backlinks: number;
-  pageviews: number;
-  page_size: number;
-  link_count: number;
-  category_depth: number;
-  percentile: number;
+const BAND_LABELS: Record<string, string> = {
+  ideal: 'ちょうど良い',
+  hard: '難しい',
+  near: '近すぎ',
+  weak: '関連薄め',
+};
+const BAND_ORDER = ['ideal', 'hard', 'near', 'weak'];
+
+interface PoolStats {
+  articles: number;
+  eligible: number;
+  links: number;
+  pairs: number;
+  byBand: Record<string, number>;
+  byDomain: Record<string, number>;
 }
 
-interface Preset {
-  id: string;
-  name: string;
-  scoreRange: [number, number];
+interface PoolArticle {
+  title: string;
+  eligible: boolean;
+  inPool: number;
+  outCount: number;
+  pageviews: number;
+  linksin: number;
+  domains: string[];
+  pairCount: number;
+}
+
+interface AssocPair {
+  a: string;
+  b: string;
+  bendAb: number;
+  bendBa: number;
+  duel: number;
+  paths3Ab: number;
+  paths3Ba: number;
+  domRel: string;
+  direct: boolean;
+  band: string;
 }
 
 interface Props {
   onBack: () => void;
 }
 
+const BAND_BADGE: Record<string, string> = {
+  ideal: 'bg-emerald-100 text-emerald-800',
+  hard: 'bg-orange-100 text-orange-800',
+  near: 'bg-rose-100 text-rose-800',
+  weak: 'bg-slate-100 text-slate-600',
+};
+
 export default function ArticleInspector({ onBack }: Props) {
-  const [articles, setArticles] = useState<Article[]>([]);
-  const [presets, setPresets] = useState<Preset[]>([]);
-  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
+  const [stats, setStats] = useState<PoolStats | null>(null);
+  const [articles, setArticles] = useState<PoolArticle[]>([]);
+  const [total, setTotal] = useState(0);
+  const [selectedBand, setSelectedBand] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState<{ totalArticles: number; scoreDistribution: number[] } | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [pairs, setPairs] = useState<AssocPair[]>([]);
+  const [pairsLoading, setPairsLoading] = useState(false);
 
   useEffect(() => {
-    fetch('/api/difficulty/presets')
-      .then((r) => r.json())
-      .then((d) => setPresets(d.presets || []));
-
-    fetch('/api/difficulty/stats')
+    fetch('/api/pool/stats')
       .then((r) => r.json())
       .then((d) => setStats(d));
-
-    loadArticles();
   }, []);
 
-  const loadArticles = (preset?: string) => {
+  useEffect(() => {
     setLoading(true);
-    const url = preset
-      ? `/api/difficulty/articles?preset=${preset}&limit=200`
-      : '/api/difficulty/articles?limit=200';
-    fetch(url)
+    const params = new URLSearchParams({ limit: '300' });
+    if (selectedBand) params.set('band', selectedBand);
+    if (search.trim()) params.set('q', search.trim());
+    fetch(`/api/pool/articles?${params}`)
       .then((r) => r.json())
       .then((d) => {
         setArticles(d.articles || []);
+        setTotal(d.total || 0);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  };
+  }, [selectedBand, search]);
 
-  const filtered = articles.filter((a) =>
-    a.title.toLowerCase().includes(search.toLowerCase())
-  );
+  const toggleExpand = (title: string) => {
+    if (expanded === title) {
+      setExpanded(null);
+      return;
+    }
+    setExpanded(title);
+    setPairsLoading(true);
+    fetch(`/api/pool/pairs?a=${encodeURIComponent(title)}&limit=20`)
+      .then((r) => r.json())
+      .then((d) => {
+        setPairs(d.pairs || []);
+        setPairsLoading(false);
+      })
+      .catch(() => setPairsLoading(false));
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 p-4">
@@ -70,27 +111,54 @@ export default function ArticleInspector({ onBack }: Props) {
           >
             <ArrowLeft className="w-5 h-5 text-gray-600" />
           </button>
-          <h1 className="text-2xl font-bold">難易度データベース内訳</h1>
+          <h1 className="text-2xl font-bold">ゴールプール内訳</h1>
         </div>
 
         {stats && (
           <div className="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mb-6">
             <div className="flex items-center gap-2 mb-4">
               <BarChart3 className="w-5 h-5 text-gray-500" />
-              <h2 className="font-bold text-gray-900">統計</h2>
+              <h2 className="font-bold text-gray-900">収集状況</h2>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
               <div className="bg-gray-50 p-3 rounded-lg text-center">
-                <div className="text-2xl font-bold text-gray-900">{stats.totalArticles}</div>
-                <div className="text-xs text-gray-500">総記事数</div>
+                <div className="text-2xl font-bold text-gray-900">{stats.articles.toLocaleString()}</div>
+                <div className="text-xs text-gray-500">収録記事</div>
               </div>
-              {stats.scoreDistribution.map((count, i) => (
-                <div key={i} className="bg-gray-50 p-3 rounded-lg text-center">
-                  <div className="text-lg font-bold text-gray-900">{count}</div>
-                  <div className="text-xs text-gray-500">{i * 10}-{(i + 1) * 10}%</div>
+              <div className="bg-emerald-50 p-3 rounded-lg text-center">
+                <div className="text-2xl font-bold text-emerald-700">{stats.eligible.toLocaleString()}</div>
+                <div className="text-xs text-gray-500">出題資格あり</div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded-lg text-center">
+                <div className="text-2xl font-bold text-gray-900">{stats.links.toLocaleString()}</div>
+                <div className="text-xs text-gray-500">プール内リンク</div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded-lg text-center">
+                <div className="text-2xl font-bold text-gray-900">{stats.pairs.toLocaleString()}</div>
+                <div className="text-xs text-gray-500">連想ペア総数</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+              {BAND_ORDER.map((band) => (
+                <div key={band} className="bg-gray-50 p-3 rounded-lg text-center">
+                  <div className="text-lg font-bold text-gray-900">
+                    {(stats.byBand[band] ?? 0).toLocaleString()}
+                  </div>
+                  <div className="text-xs text-gray-500">{BAND_LABELS[band]}</div>
                 </div>
               ))}
             </div>
+            {Object.keys(stats.byDomain).length > 0 && (
+              <div className="flex gap-2 flex-wrap">
+                {Object.entries(stats.byDomain)
+                  .sort((a, b) => Number(b[1]) - Number(a[1]))
+                  .map(([d, c]) => (
+                    <span key={d} className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full">
+                      {d}: {c}
+                    </span>
+                  ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -108,32 +176,26 @@ export default function ArticleInspector({ onBack }: Props) {
             </div>
             <div className="flex gap-2 flex-wrap">
               <button
-                onClick={() => {
-                  setSelectedPreset(null);
-                  loadArticles();
-                }}
+                onClick={() => setSelectedBand(null)}
                 className={`px-3 py-2 text-xs font-bold rounded-lg border transition-colors ${
-                  selectedPreset === null
+                  selectedBand === null
                     ? 'bg-gray-900 text-white border-gray-900'
                     : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
                 }`}
               >
                 すべて
               </button>
-              {presets.map((p) => (
+              {BAND_ORDER.map((band) => (
                 <button
-                  key={p.id}
-                  onClick={() => {
-                    setSelectedPreset(p.id);
-                    loadArticles(p.id);
-                  }}
+                  key={band}
+                  onClick={() => setSelectedBand(band)}
                   className={`px-3 py-2 text-xs font-bold rounded-lg border transition-colors ${
-                    selectedPreset === p.id
+                    selectedBand === band
                       ? 'bg-gray-900 text-white border-gray-900'
                       : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
                   }`}
                 >
-                  {p.name}
+                  {BAND_LABELS[band]}
                 </button>
               ))}
             </div>
@@ -150,47 +212,102 @@ export default function ArticleInspector({ onBack }: Props) {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="text-left px-4 py-3 font-bold text-gray-700">記事名</th>
-                  <th className="text-right px-4 py-3 font-bold text-gray-700">スコア</th>
-                  <th className="text-right px-4 py-3 font-bold text-gray-700">被リンク</th>
-                  <th className="text-right px-4 py-3 font-bold text-gray-700">閲覧数</th>
-                  <th className="text-right px-4 py-3 font-bold text-gray-700">サイズ</th>
-                  <th className="text-right px-4 py-3 font-bold text-gray-700">リンク数</th>
+                  <th className="text-center px-4 py-3 font-bold text-gray-700">資格</th>
+                  <th className="text-right px-4 py-3 font-bold text-gray-700">ペア数</th>
+                  <th className="text-right px-4 py-3 font-bold text-gray-700">池内被リンク</th>
+                  <th className="text-right px-4 py-3 font-bold text-gray-700">全被リンク</th>
+                  <th className="text-right px-4 py-3 font-bold text-gray-700">30日PV</th>
+                  <th className="text-left px-4 py-3 font-bold text-gray-700">ドメイン</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filtered.map((article) => (
-                  <tr key={article.title} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-medium text-gray-900">
-                      <a
-                        href={`https://ja.wikipedia.org/wiki/${encodeURIComponent(article.title)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:underline"
-                      >
-                        {article.title}
-                      </a>
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-700">
-                      {article.normalized_score.toFixed(3)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-700">
-                      {article.backlinks.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-700">
-                      {article.pageviews.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-700">
-                      {(article.page_size / 1024).toFixed(1)}KB
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-700">
-                      {article.link_count.toLocaleString()}
-                    </td>
-                  </tr>
+                {articles.map((article) => (
+                  <React.Fragment key={article.title}>
+                    <tr
+                      className="hover:bg-gray-50 transition-colors cursor-pointer"
+                      onClick={() => toggleExpand(article.title)}
+                    >
+                      <td className="px-4 py-3 font-medium text-gray-900">
+                        <span className="inline-flex items-center gap-1">
+                          {expanded === article.title ? (
+                            <ChevronDown className="w-3 h-3 text-gray-400" />
+                          ) : (
+                            <ChevronRight className="w-3 h-3 text-gray-400" />
+                          )}
+                          {article.title}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {article.eligible ? (
+                          <span className="text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
+                            可
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-gray-700">
+                        {article.pairCount.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-gray-700">
+                        {article.inPool.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-gray-700">
+                        {article.linksin.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-gray-700">
+                        {article.pageviews.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-600">
+                        {article.domains.join('・') || '—'}
+                      </td>
+                    </tr>
+                    {expanded === article.title && (
+                      <tr>
+                        <td colSpan={7} className="px-4 py-3 bg-slate-50">
+                          {pairsLoading ? (
+                            <div className="text-xs text-gray-500">ペア読み込み中...</div>
+                          ) : pairs.length === 0 ? (
+                            <div className="text-xs text-gray-500">連想ペアなし</div>
+                          ) : (
+                            <div className="space-y-1">
+                              {pairs.map((p) => (
+                                <div key={p.b} className="flex items-center gap-2 text-xs">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full font-bold ${BAND_BADGE[p.band] ?? ''}`}
+                                  >
+                                    {BAND_LABELS[p.band] ?? p.band}
+                                  </span>
+                                  <a
+                                    href={`https://ja.wikipedia.org/wiki/${encodeURIComponent(p.b)}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="font-medium text-gray-800 hover:underline"
+                                  >
+                                    {p.b}
+                                  </a>
+                                  <span className="text-gray-400">
+                                    bend {p.bendAb}/{p.bendBa}・duel {p.duel}・3手 {p.paths3Ab}/{p.paths3Ba}・{p.domRel}
+                                    {p.direct ? '・直結' : ''}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
-            {filtered.length === 0 && (
+            {articles.length === 0 && (
               <div className="text-center py-12 text-gray-500 text-sm">記事が見つかりません</div>
+            )}
+            {articles.length > 0 && (
+              <div className="text-center py-2 text-xs text-gray-400 border-t border-gray-100">
+                全{total.toLocaleString()}件中 {articles.length}件表示（行を押すとペア詳細）
+              </div>
             )}
           </div>
         )}
