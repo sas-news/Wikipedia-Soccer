@@ -361,6 +361,10 @@ export function getPoolArticleList(opts: {
     where.push('title LIKE @q');
     params.q = `%${q}%`;
   }
+  if (band) {
+    where.push('EXISTS (SELECT 1 FROM assoc_pairs ap WHERE ap.a = pool_articles.title AND ap.band = @band)');
+    params.band = band;
+  }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const countSql = `SELECT COUNT(*) c FROM pool_articles ${whereSql}`;
   const listSql = `
@@ -370,7 +374,6 @@ export function getPoolArticleList(opts: {
     FROM pool_articles ${whereSql}
     ORDER BY eligible DESC, ${band ? 'pairCount DESC,' : ''} in_pool DESC
     LIMIT @limit OFFSET @offset`;
-  if (band) params.band = band;
   params.limit = limit;
   params.offset = offset;
 
@@ -394,6 +397,7 @@ export function getPoolArticleList(opts: {
 /** ある記事起点のペア一覧（帯→関連度順） */
 export function getPairsForArticle(title: string, limit = 50): AssocPair[] {
   const db = getDb();
+  const safeLimit = Math.max(0, Math.min(limit, 200));
   const rows = db
     .prepare(
       `SELECT * FROM assoc_pairs WHERE a = ?
@@ -401,6 +405,6 @@ export function getPairsForArticle(title: string, limit = 50): AssocPair[] {
                 (bend_ab + bend_ba + duel) DESC
        LIMIT ?`
     )
-    .all(title, limit) as any[];
+    .all(title, safeLimit) as any[];
   return rows.map(rowToPair);
 }

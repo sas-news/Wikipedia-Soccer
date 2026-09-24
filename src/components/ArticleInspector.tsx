@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Search, BarChart3, ChevronDown, ChevronRight } from 'lucide-react';
 
 const BAND_LABELS: Record<string, string> = {
@@ -85,20 +85,28 @@ export default function ArticleInspector({ onBack }: Props) {
       .catch(() => setLoading(false));
   }, [selectedBand, search]);
 
+  const expandedRef = useRef<string | null>(null);
+
   const toggleExpand = (title: string) => {
     if (expanded === title) {
+      expandedRef.current = null;
       setExpanded(null);
       return;
     }
+    expandedRef.current = title;
     setExpanded(title);
+    setPairs([]);
     setPairsLoading(true);
     fetch(`/api/pool/pairs?a=${encodeURIComponent(title)}&limit=20`)
       .then((r) => r.json())
       .then((d) => {
+        if (expandedRef.current !== title) return;
         setPairs(d.pairs || []);
         setPairsLoading(false);
       })
-      .catch(() => setPairsLoading(false));
+      .catch(() => {
+        if (expandedRef.current === title) setPairsLoading(false);
+      });
   };
 
   return (
