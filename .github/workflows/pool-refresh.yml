@@ -25,6 +25,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # 前回コミット分のDBを展開。旧難易度テーブル(articles)のスコアを引き継ぐため必須
+      # （--fresh はプール系テーブルのみ削除し articles は保持する）
+      - name: Restore existing DB
+        run: |
+          if [ -f data/difficulty.db.gz ]; then
+            gzip -dkf data/difficulty.db.gz || echo "::warning::existing archive corrupt, rebuilding from scratch"
+          fi
+
       - name: Collect article pool from Wikipedia
         run: npx tsx src/server/pool-collect.ts --fresh --concurrency 8
         env:
@@ -32,6 +40,11 @@ jobs:
 
       - name: Precompute associative pairs
         run: npx tsx src/server/assoc.ts
+
+      # アーカイブ無しの初回ビルドでは articles が空なので、旧難易度APIがフォールバック
+      # しないようシードする（既にシード済みならスキップされる）
+      - name: Seed scoring table if empty
+        run: npx tsx -e "import('./src/server/seed').then(m => m.seedDatabase()).catch(e => { console.error(e); process.exit(1) })"
 
       - name: Compress DB
         run: gzip -kf data/difficulty.db

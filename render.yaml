@@ -7,7 +7,7 @@ services:
     plan: free
     region: singapore
     branch: main
-    buildCommand: npm ci && npm run build && (gzip -dkf data/difficulty.db.gz 2>/dev/null || true)
+    buildCommand: npm ci && npm run build && (if [ -f data/difficulty.db.gz ]; then gzip -dkf data/difficulty.db.gz; fi)
     startCommand: npm run start
     healthCheckPath: /healthz
     envVars:
