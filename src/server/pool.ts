@@ -190,15 +190,40 @@ export function finalizePoolDegrees(): void {
   `);
 }
 
-/** 有名度フロア: pv>=pv かつ (linksin>=li または pv>=pvRescue)。li取得失敗記事を高pvで救済 */
+/** 有名度フロア: pv>=pv かつ (linksin>=li または pv>=pvRescue)。li取得失敗記事を高pvで救済
+ *  blockCats: 「語として難しい」カテゴリ（部分一致）を除外
+ *  maxLen: タイトル最大文字数（長大な固有名を弾く）
+ *  blockYear: 年・年代タイトルを弾く */
 export interface FameGate {
   pv: number;
   li: number;
   pvRescue: number;
+  maxLen?: number;
+  blockCats?: string[];
+  blockYear?: boolean;
 }
 
-function fameSql(alias: string): string {
-  return `${alias}.pageviews >= @fpv AND (${alias}.linksin >= @fli OR ${alias}.pageviews >= @fres)`;
+function fameSql(alias: string, gate: FameGate, params: Record<string, unknown>): string {
+  const parts = [`${alias}.pageviews >= @fpv AND (${alias}.linksin >= @fli OR ${alias}.pageviews >= @fres)`];
+  params.fpv = gate.pv;
+  params.fli = gate.li;
+  params.fres = gate.pvRescue;
+  if (gate.maxLen) {
+    parts.push(`LENGTH(${alias}.title) <= @maxlen`);
+    params.maxlen = gate.maxLen;
+  }
+  if (gate.blockYear) {
+    parts.push(`${alias}.title NOT GLOB '[0-9]*年' AND ${alias}.title NOT GLOB '[0-9]*年代'`);
+  }
+  if (gate.blockCats?.length) {
+    const likes = gate.blockCats.map((_, i) => {
+      const k = `bc${i}`;
+      params[k] = `%${gate.blockCats![i]}%`;
+      return `pc.cat LIKE @${k}`;
+    });
+    parts.push(`NOT EXISTS (SELECT 1 FROM pool_cats pc WHERE pc.title = ${alias}.title AND (${likes.join(' OR ')}))`);
+  }
+  return parts.join(' AND ');
 }
 
 export function getEligibleTitles(fame?: FameGate): string[] {
@@ -209,9 +234,10 @@ export function getEligibleTitles(fame?: FameGate): string[] {
       .all() as Array<{ title: string }>;
     return rows.map((r) => r.title);
   }
+  const params: Record<string, unknown> = {};
   const rows = db
-    .prepare(`SELECT title FROM pool_articles WHERE eligible = 1 AND ${fameSql('pool_articles')}`)
-    .all({ fpv: fame.pv, fli: fame.li, fres: fame.pvRescue }) as Array<{ title: string }>;
+    .prepare(`SELECT title FROM pool_articles WHERE eligible = 1 AND ${fameSql('pool_articles', fame, params)}`)
+    .all(params) as Array<{ title: string }>;
   return rows.map((r) => r.title);
 }
 
@@ -267,17 +293,21 @@ export function clearAssocPairs(): void {
 /** A起点で指定帯のペアを全件取得 */
 export function getPairsFrom(a: string, band: PairBand, fame?: FameGate): AssocPair[] {
   const db = getDb();
-  const rows = fame
-    ? db
-        .prepare(
-          `SELECT ap.* FROM assoc_pairs ap
-           JOIN pool_articles pb ON pb.title = ap.b AND ${fameSql('pb')}
-           WHERE ap.a = @a AND ap.band = @band`
-        )
-        .all({ fpv: fame.pv, fli: fame.li, fres: fame.pvRescue, a, band }) as any[]
-    : db
-        .prepare('SELECT * FROM assoc_pairs WHERE a = ? AND band = ?')
-        .all(a, band) as any[];
+  let rows: any[];
+  if (fame) {
+    const params: Record<string, unknown> = { a, band };
+    rows = db
+      .prepare(
+        `SELECT ap.* FROM assoc_pairs ap
+         JOIN pool_articles pb ON pb.title = ap.b AND ${fameSql('pb', fame, params)}
+         WHERE ap.a = @a AND ap.band = @band`
+      )
+      .all(params) as any[];
+  } else {
+    rows = db
+      .prepare('SELECT * FROM assoc_pairs WHERE a = ? AND band = ?')
+      .all(a, band) as any[];
+  }
   return rows.map(rowToPair);
 }
 

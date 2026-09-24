@@ -31,12 +31,18 @@ const BAND_MAP: Record<string, PairBand> = {
   very_hard: 'hard',
 };
 
+/** 「語として難しい」系統を弾くカテゴリ（部分一致）: 元号・条約等の形式名・用語集・旧国家・スタブ・一覧 */
+const HARD_WORD_CATS = [
+  '元号', '条約', '法令', '法典', '用語',
+  'かつて存在した', 'スタブ', '一覧', '身分制度', '廃れた職業',
+];
+
 /** difficultyプリセットID → 両端の有名度ゲート（pv優遇はlinksin取得失敗の救済）
  *  帯は関係の遠近だけを見るため、読みにくい語が混ざらないよう別軸で絞る */
 const FAME_MAP: Record<string, FameGate> = {
-  very_easy: { pv: 4000, li: 300, pvRescue: 12000 }, // 有名語のみ（184記事/2006組）
-  easy: { pv: 4000, li: 300, pvRescue: 12000 },
-  medium: { pv: 2000, li: 200, pvRescue: 8000 },     // 中堅語まで（372記事/6666組）
+  very_easy: { pv: 4000, li: 300, pvRescue: 12000, maxLen: 14, blockCats: HARD_WORD_CATS, blockYear: true }, // 有名語のみ（138記事/882組）
+  easy: { pv: 4000, li: 300, pvRescue: 12000, maxLen: 14, blockCats: HARD_WORD_CATS, blockYear: true },
+  medium: { pv: 2000, li: 200, pvRescue: 8000, blockCats: HARD_WORD_CATS, blockYear: true }, // 中堅語まで（260記事/2818組）
   hard: { pv: 0, li: 0, pvRescue: 0 },
   very_hard: { pv: 0, li: 0, pvRescue: 0 },
 };
