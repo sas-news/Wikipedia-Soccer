@@ -304,3 +304,110 @@ export function pickStartPage(exclude: string[]): string | undefined {
     .get(...exclude) as { title: string } | undefined;
   return row?.title;
 }
+
+// ---------- 内訳ページ用クエリ ----------
+
+export function getBandCounts(): Record<string, number> {
+  const db = getDb();
+  const rows = db
+    .prepare('SELECT band, COUNT(*) c FROM assoc_pairs GROUP BY band')
+    .all() as Array<{ band: string; c: number }>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.band] = r.c;
+  return out;
+}
+
+export function getDomainCounts(): Record<string, number> {
+  const db = getDb();
+  const rows = db
+    .prepare('SELECT domains FROM pool_articles WHERE eligible = 1')
+    .all() as Array<{ domains: string }>;
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    for (const d of JSON.parse(r.domains) as string[]) {
+      out[d] = (out[d] ?? 0) + 1;
+    }
+  }
+  return out;
+}
+
+export interface PoolArticleRow {
+  title: string;
+  eligible: boolean;
+  inPool: number;
+  outCount: number;
+  pageviews: number;
+  linksin: number;
+  domains: string[];
+  pairCount: number;
+}
+
+/** 内訳ページ: 記事一覧（検索+帯別ペア数つき） */
+export function getPoolArticleList(opts: {
+  band?: PairBand;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}): { articles: PoolArticleRow[]; total: number } {
+  const db = getDb();
+  const band = opts.band;
+  const q = opts.q?.trim();
+  const limit = Math.min(opts.limit ?? 100, 500);
+  const offset = opts.offset ?? 0;
+
+  const where: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (q) {
+    where.push('title LIKE @q');
+    params.q = `%${q}%`;
+  }
+  if (band) {
+    where.push('EXISTS (SELECT 1 FROM assoc_pairs ap WHERE ap.a = pool_articles.title AND ap.band = @band)');
+    params.band = band;
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const countSql = `SELECT COUNT(*) c FROM pool_articles ${whereSql}`;
+  const listSql = `
+    SELECT *,
+      (SELECT COUNT(*) FROM assoc_pairs ap
+        WHERE ap.a = pool_articles.title ${band ? 'AND ap.band = @band' : ''}) AS pairCount
+    FROM pool_articles ${whereSql}
+    ORDER BY eligible DESC, ${band ? 'pairCount DESC,' : ''} in_pool DESC
+    LIMIT @limit OFFSET @offset`;
+  params.limit = limit;
+  params.offset = offset;
+
+  const countParams: Record<string, unknown> = {};
+  if (q) countParams.q = params.q;
+  if (band) countParams.band = band;
+  const total = (db.prepare(countSql).get(countParams) as { c: number }).c;
+  const rows = db.prepare(listSql).all(params) as any[];
+  return {
+    total,
+    articles: rows.map((r) => ({
+      title: r.title,
+      eligible: !!r.eligible,
+      inPool: r.in_pool,
+      outCount: r.out_count,
+      pageviews: r.pageviews,
+      linksin: r.linksin,
+      domains: JSON.parse(r.domains),
+      pairCount: r.pairCount,
+    })),
+  };
+}
+
+/** ある記事起点のペア一覧（帯→関連度順） */
+export function getPairsForArticle(title: string, limit = 50): AssocPair[] {
+  const db = getDb();
+  const safeLimit = Math.max(0, Math.min(limit, 200));
+  const rows = db
+    .prepare(
+      `SELECT * FROM assoc_pairs WHERE a = ?
+       ORDER BY CASE band WHEN 'ideal' THEN 0 WHEN 'hard' THEN 1 WHEN 'near' THEN 2 ELSE 3 END,
+                (bend_ab + bend_ba + duel) DESC
+       LIMIT ?`
+    )
+    .all(title, safeLimit) as any[];
+  return rows.map(rowToPair);
+}

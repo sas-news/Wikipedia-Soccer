@@ -36,9 +36,10 @@ function resolveBand(difficulty?: string): PairBand[] {
   if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'weak') {
     return [difficulty];
   }
+  // hard要求時のみidealへフォールバック。ideal要求時にhardへ落とすと
+  // 「ちょうど良い」で遠すぎペアが混ざるため落とさない
   const band = BAND_MAP[difficulty];
-  if (band === 'ideal') return ['ideal', 'hard'];
-  return [band, 'ideal']; // hard が無いペアは ideal に落とす
+  return band === 'hard' ? ['hard', 'ideal'] : ['ideal'];
 }
 
 function drawB(a: string, bands: PairBand[]): AssocPair | undefined {

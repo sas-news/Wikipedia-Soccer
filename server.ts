@@ -8,6 +8,7 @@ import { seedDatabase } from './src/server/seed';
 import { initPoolSchema } from './src/server/pool';
 import difficultyRoutes, { handleRandomWithDifficulty } from './src/server/routes/difficulty';
 import matchRoutes from './src/server/routes/match';
+import poolRoutes from './src/server/routes/pool';
 
 async function startServer() {
   initDatabase();
@@ -329,6 +330,7 @@ async function startServer() {
 
   // Associative pair-draw API
   app.use('/api', matchRoutes);
+  app.use('/api', poolRoutes);
 
   // Render etc. のヘルスチェック用
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
