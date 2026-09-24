@@ -17,7 +17,7 @@ import {
   pickStartPage,
   getPoolStats,
 } from '../pool';
-import type { AssocPair, PairBand } from '../pool';
+import type { AssocPair, FameGate, PairBand } from '../pool';
 import { fetchRandomArticles } from '../wiki-api';
 
 const router = Router();
@@ -31,14 +31,14 @@ const BAND_MAP: Record<string, PairBand> = {
   very_hard: 'hard',
 };
 
-/** difficultyプリセットID → 両端の最小30日PV（単語の有名度フロア）
+/** difficultyプリセットID → 両端の有名度ゲート（pv優遇はlinksin取得失敗の救済）
  *  帯は関係の遠近だけを見るため、読みにくい語が混ざらないよう別軸で絞る */
-const FAME_MAP: Record<string, number> = {
-  very_easy: 2700, // 資格記事の上位約25%
-  easy: 2700,
-  medium: 1200,    // 上位約50%
-  hard: 0,
-  very_hard: 0,
+const FAME_MAP: Record<string, FameGate> = {
+  very_easy: { pv: 4000, li: 300, pvRescue: 12000 }, // 有名語のみ（184記事/2006組）
+  easy: { pv: 4000, li: 300, pvRescue: 12000 },
+  medium: { pv: 2000, li: 200, pvRescue: 8000 },     // 中堅語まで（372記事/6666組）
+  hard: { pv: 0, li: 0, pvRescue: 0 },
+  very_hard: { pv: 0, li: 0, pvRescue: 0 },
 };
 
 function resolveBand(difficulty?: string): PairBand[] {
@@ -52,15 +52,16 @@ function resolveBand(difficulty?: string): PairBand[] {
   return band === 'hard' ? ['hard', 'ideal'] : ['ideal'];
 }
 
-function resolveFame(difficulty?: string): number {
-  if (!difficulty) return 0;
-  if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'weak') return 0;
-  return FAME_MAP[difficulty] ?? 0;
+function resolveFame(difficulty?: string): FameGate | undefined {
+  if (!difficulty) return undefined;
+  if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'weak') return undefined;
+  const g = FAME_MAP[difficulty];
+  return g && g.pv > 0 ? g : undefined;
 }
 
-function drawB(a: string, bands: PairBand[], minBPv = 0): AssocPair | undefined {
+function drawB(a: string, bands: PairBand[], fame?: FameGate): AssocPair | undefined {
   for (const band of bands) {
-    const pairs = getPairsFrom(a, band, minBPv);
+    const pairs = getPairsFrom(a, band, fame);
     if (pairs.length > 0) {
       return pairs[Math.floor(Math.random() * pairs.length)];
     }
@@ -81,7 +82,7 @@ router.get('/match', async (req, res) => {
     const difficulty = req.query.difficulty as string | undefined;
     const fixedA = req.query.a as string | undefined;
     const bands = resolveBand(difficulty);
-    const minPv = resolveFame(difficulty);
+    const fame = resolveFame(difficulty);
 
     const stats = getPoolStats();
     if (stats.eligible === 0 || stats.pairs === 0) {
@@ -111,10 +112,10 @@ router.get('/match', async (req, res) => {
     // A未定: 帯に合うBを持つAを抽選（最大30回試行）
     let pair: AssocPair | undefined;
     if (!a) {
-      const elig = getEligibleTitles(minPv);
-      for (let i = 0; i < 30; i++) {
+      const elig = getEligibleTitles(fame);
+      for (let i = 0; i < 30 && elig.length > 0; i++) {
         const cand = elig[Math.floor(Math.random() * elig.length)];
-        const p = drawB(cand, bands, minPv);
+        const p = drawB(cand, bands, fame);
         if (p) {
           a = cand;
           pair = p;
@@ -123,7 +124,7 @@ router.get('/match', async (req, res) => {
       }
     } else {
       // 固定Aはユーザー指定のためA側フロアなし。Bには難易度のフロアを適用
-      pair = drawB(a, bands, minPv);
+      pair = drawB(a, bands, fame);
     }
 
     if (!a || !pair) {
@@ -138,7 +139,7 @@ router.get('/match', async (req, res) => {
       a: pair.a,
       b: pair.b,
       band: pair.band,
-      difficulty: difficulty ?? 'medium',
+      difficulty: difficulty ?? 'ideal',
       start: symmetricStart(pair.a, pair.b),
       stats: {
         bend: [pair.bendAb, pair.bendBa],

@@ -190,11 +190,28 @@ export function finalizePoolDegrees(): void {
   `);
 }
 
-export function getEligibleTitles(minPageviews = 0): string[] {
+/** 有名度フロア: pv>=pv かつ (linksin>=li または pv>=pvRescue)。li取得失敗記事を高pvで救済 */
+export interface FameGate {
+  pv: number;
+  li: number;
+  pvRescue: number;
+}
+
+function fameSql(alias: string): string {
+  return `${alias}.pageviews >= @fpv AND (${alias}.linksin >= @fli OR ${alias}.pageviews >= @fres)`;
+}
+
+export function getEligibleTitles(fame?: FameGate): string[] {
   const db = getDb();
+  if (!fame) {
+    const rows = db
+      .prepare('SELECT title FROM pool_articles WHERE eligible = 1')
+      .all() as Array<{ title: string }>;
+    return rows.map((r) => r.title);
+  }
   const rows = db
-    .prepare('SELECT title FROM pool_articles WHERE eligible = 1 AND pageviews >= ?')
-    .all(minPageviews) as Array<{ title: string }>;
+    .prepare(`SELECT title FROM pool_articles WHERE eligible = 1 AND ${fameSql('pool_articles')}`)
+    .all({ fpv: fame.pv, fli: fame.li, fres: fame.pvRescue }) as Array<{ title: string }>;
   return rows.map((r) => r.title);
 }
 
@@ -248,16 +265,16 @@ export function clearAssocPairs(): void {
 }
 
 /** A起点で指定帯のペアを全件取得 */
-export function getPairsFrom(a: string, band: PairBand, minBPageviews = 0): AssocPair[] {
+export function getPairsFrom(a: string, band: PairBand, fame?: FameGate): AssocPair[] {
   const db = getDb();
-  const rows = minBPageviews > 0
+  const rows = fame
     ? db
         .prepare(
           `SELECT ap.* FROM assoc_pairs ap
-           JOIN pool_articles pb ON pb.title = ap.b AND pb.pageviews >= ?
-           WHERE ap.a = ? AND ap.band = ?`
+           JOIN pool_articles pb ON pb.title = ap.b AND ${fameSql('pb')}
+           WHERE ap.a = @a AND ap.band = @band`
         )
-        .all(minBPageviews, a, band) as any[]
+        .all({ fpv: fame.pv, fli: fame.li, fres: fame.pvRescue, a, band }) as any[]
     : db
         .prepare('SELECT * FROM assoc_pairs WHERE a = ? AND band = ?')
         .all(a, band) as any[];
