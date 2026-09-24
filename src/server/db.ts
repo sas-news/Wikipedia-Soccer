@@ -8,7 +8,7 @@ const DB_PATH = path.join(DB_DIR, 'difficulty.db');
 
 let db: Database.Database | null = null;
 
-function getDb(): Database.Database {
+export function getDb(): Database.Database {
   if (!db) {
     if (!fs.existsSync(DB_DIR)) {
       fs.mkdirSync(DB_DIR, { recursive: true });

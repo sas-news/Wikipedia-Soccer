@@ -5,10 +5,13 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { initDatabase } from './src/server/db';
 import { seedDatabase } from './src/server/seed';
+import { initPoolSchema } from './src/server/pool';
 import difficultyRoutes, { handleRandomWithDifficulty } from './src/server/routes/difficulty';
+import matchRoutes from './src/server/routes/match';
 
 async function startServer() {
   initDatabase();
+  initPoolSchema();
   seedDatabase().catch((e) => console.error('[DifficultyDB] Background seed error:', e));
 
   const app = express();
@@ -323,6 +326,9 @@ async function startServer() {
 
   // Difficulty-related API routes
   app.use('/api', difficultyRoutes);
+
+  // Associative pair-draw API
+  app.use('/api', matchRoutes);
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
