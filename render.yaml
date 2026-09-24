@@ -1,0 +1,15 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# 「New Blueprint Instance」でこのリポジトリを指定するだけでサービスが作られます。
+services:
+  - type: web
+    name: wikipedia-soccer
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm ci && npm run build && (gzip -dkf data/difficulty.db.gz 2>/dev/null || true)
+    startCommand: npm run start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
