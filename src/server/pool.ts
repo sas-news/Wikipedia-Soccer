@@ -377,7 +377,10 @@ export function getPoolArticleList(opts: {
   params.limit = limit;
   params.offset = offset;
 
-  const total = (db.prepare(countSql).get(params) as { c: number }).c;
+  const countParams: Record<string, unknown> = {};
+  if (q) countParams.q = params.q;
+  if (band) countParams.band = band;
+  const total = (db.prepare(countSql).get(countParams) as { c: number }).c;
   const rows = db.prepare(listSql).all(params) as any[];
   return {
     total,
