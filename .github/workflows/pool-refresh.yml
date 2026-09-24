@@ -46,6 +46,11 @@ jobs:
       - name: Seed scoring table if empty
         run: npx tsx -e "import('./src/server/seed').then(m => m.seedDatabase()).catch(e => { console.error(e); process.exit(1) })"
 
+      # seedDatabase は収集失敗を握り潰して正常終了するため、実際に行が入ったか検証。
+      # 空のままアーカイブを公開しないよう、0件ならジョブを落とす
+      - name: Verify scoring table populated
+        run: npx tsx -e "import('./src/server/db').then(m => { m.initDatabase(); const n = m.getArticleCount(); console.log('articles:', n); if (n === 0) process.exit(1) })"
+
       - name: Compress DB
         run: gzip -kf data/difficulty.db
 
