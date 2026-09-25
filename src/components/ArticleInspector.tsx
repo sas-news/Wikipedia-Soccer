@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Search, BarChart3, ChevronDown, ChevronRight } from 'lucide-react';
+import { Search, BarChart3, ChevronDown, ChevronRight } from 'lucide-react';
+import BackButton from './BackButton';
 
 const BAND_LABELS: Record<string, string> = {
   ideal: 'ちょうど良い',
@@ -8,6 +9,12 @@ const BAND_LABELS: Record<string, string> = {
   weak: '関連薄め',
 };
 const BAND_ORDER = ['ideal', 'hard', 'near', 'weak'];
+const BAND_DESC: Record<string, string> = {
+  ideal: 'ゲームで出題される帯（連想距離がちょうど良い組み合わせ）',
+  hard: 'ゲームの「難しい」で出題される帯（遠いが届く）',
+  near: '近すぎて出題されない組み合わせ',
+  weak: '関連が薄すぎて出題されない組み合わせ',
+};
 
 interface PoolStats {
   articles: number;
@@ -55,14 +62,22 @@ const BAND_BADGE: Record<string, string> = {
 
 export default function ArticleInspector({ onBack }: Props) {
   const [stats, setStats] = useState<PoolStats | null>(null);
+  const [tab, setTab] = useState<'articles' | 'pairs'>('articles');
+
+  // 記事タブ
   const [articles, setArticles] = useState<PoolArticle[]>([]);
   const [total, setTotal] = useState(0);
-  const [selectedBand, setSelectedBand] = useState<string | null>(null);
+  const [eligibleOnly, setEligibleOnly] = useState(true);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [pairs, setPairs] = useState<AssocPair[]>([]);
   const [pairsLoading, setPairsLoading] = useState(false);
+
+  // ペアタブ
+  const [pairBand, setPairBand] = useState<string>('ideal');
+  const [bandPairs, setBandPairs] = useState<AssocPair[]>([]);
+  const [bandLoading, setBandLoading] = useState(false);
 
   useEffect(() => {
     fetch('/api/pool/stats')
@@ -71,9 +86,10 @@ export default function ArticleInspector({ onBack }: Props) {
   }, []);
 
   useEffect(() => {
+    if (tab !== 'articles') return;
     setLoading(true);
     const params = new URLSearchParams({ limit: '300' });
-    if (selectedBand) params.set('band', selectedBand);
+    if (eligibleOnly) params.set('eligible', '1');
     if (search.trim()) params.set('q', search.trim());
     fetch(`/api/pool/articles?${params}`)
       .then((r) => r.json())
@@ -83,7 +99,19 @@ export default function ArticleInspector({ onBack }: Props) {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [selectedBand, search]);
+  }, [tab, eligibleOnly, search]);
+
+  useEffect(() => {
+    if (tab !== 'pairs') return;
+    setBandLoading(true);
+    fetch(`/api/pool/pairs?band=${pairBand}&limit=60`)
+      .then((r) => r.json())
+      .then((d) => {
+        setBandPairs(d.pairs || []);
+        setBandLoading(false);
+      })
+      .catch(() => setBandLoading(false));
+  }, [tab, pairBand]);
 
   const expandedRef = useRef<string | null>(null);
 
@@ -109,16 +137,22 @@ export default function ArticleInspector({ onBack }: Props) {
       });
   };
 
+  const tabBtn = (t: 'articles' | 'pairs', label: string) => (
+    <button
+      onClick={() => setTab(t)}
+      className={`px-4 py-2 text-sm font-bold rounded-lg transition-colors ${
+        tab === t ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div className="min-h-screen bg-slate-50 p-4">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-6">
-          <button
-            onClick={onBack}
-            className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-50 transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5 text-gray-600" />
-          </button>
+          <BackButton onClick={onBack} />
           <h1 className="text-2xl font-bold">ゴールプール内訳</h1>
         </div>
 
@@ -148,12 +182,17 @@ export default function ArticleInspector({ onBack }: Props) {
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
               {BAND_ORDER.map((band) => (
-                <div key={band} className="bg-gray-50 p-3 rounded-lg text-center">
+                <button
+                  key={band}
+                  onClick={() => { setPairBand(band); setTab('pairs'); }}
+                  className="bg-gray-50 hover:bg-gray-100 p-3 rounded-lg text-center transition-colors"
+                  title={`${BAND_LABELS[band]}のペアを見る`}
+                >
                   <div className="text-lg font-bold text-gray-900">
                     {(stats.byBand[band] ?? 0).toLocaleString()}
                   </div>
                   <div className="text-xs text-gray-500">{BAND_LABELS[band]}</div>
-                </div>
+                </button>
               ))}
             </div>
             {Object.keys(stats.byDomain).length > 0 && (
@@ -170,154 +209,210 @@ export default function ArticleInspector({ onBack }: Props) {
           </div>
         )}
 
-        <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-100 mb-6">
-          <div className="flex flex-col sm:flex-row gap-3">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="記事名で検索..."
-                className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-              />
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              <button
-                onClick={() => setSelectedBand(null)}
-                className={`px-3 py-2 text-xs font-bold rounded-lg border transition-colors ${
-                  selectedBand === null
-                    ? 'bg-gray-900 text-white border-gray-900'
-                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                }`}
-              >
-                すべて
-              </button>
-              {BAND_ORDER.map((band) => (
-                <button
-                  key={band}
-                  onClick={() => setSelectedBand(band)}
-                  className={`px-3 py-2 text-xs font-bold rounded-lg border transition-colors ${
-                    selectedBand === band
-                      ? 'bg-gray-900 text-white border-gray-900'
-                      : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  {BAND_LABELS[band]}
-                </button>
-              ))}
-            </div>
-          </div>
+        <div className="flex gap-2 mb-4">
+          {tabBtn('articles', '収録記事')}
+          {tabBtn('pairs', '出題ペア（帯別）')}
         </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="h-6 w-6 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
-          </div>
-        ) : (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="text-left px-4 py-3 font-bold text-gray-700">記事名</th>
-                  <th className="text-center px-4 py-3 font-bold text-gray-700">資格</th>
-                  <th className="text-right px-4 py-3 font-bold text-gray-700">ペア数</th>
-                  <th className="text-right px-4 py-3 font-bold text-gray-700">池内被リンク</th>
-                  <th className="text-right px-4 py-3 font-bold text-gray-700">全被リンク</th>
-                  <th className="text-right px-4 py-3 font-bold text-gray-700">30日PV</th>
-                  <th className="text-left px-4 py-3 font-bold text-gray-700">ドメイン</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {articles.map((article) => (
-                  <React.Fragment key={article.title}>
-                    <tr
-                      className="hover:bg-gray-50 transition-colors cursor-pointer"
-                      onClick={() => toggleExpand(article.title)}
-                    >
-                      <td className="px-4 py-3 font-medium text-gray-900">
-                        <span className="inline-flex items-center gap-1">
-                          {expanded === article.title ? (
-                            <ChevronDown className="w-3 h-3 text-gray-400" />
-                          ) : (
-                            <ChevronRight className="w-3 h-3 text-gray-400" />
-                          )}
-                          {article.title}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {article.eligible ? (
-                          <span className="text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
-                            可
-                          </span>
-                        ) : (
-                          <span className="text-xs text-gray-400">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono text-gray-700">
-                        {article.pairCount.toLocaleString()}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono text-gray-700">
-                        {article.inPool.toLocaleString()}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono text-gray-700">
-                        {article.linksin.toLocaleString()}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono text-gray-700">
-                        {article.pageviews.toLocaleString()}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-600">
-                        {article.domains.join('・') || '—'}
-                      </td>
+        {tab === 'articles' && (
+          <>
+            <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-100 mb-6">
+              <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="記事名で検索..."
+                    className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm font-bold text-gray-700 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={eligibleOnly}
+                    onChange={(e) => setEligibleOnly(e.target.checked)}
+                    className="w-4 h-4 accent-gray-900"
+                  />
+                  出題される記事のみ
+                </label>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="h-6 w-6 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-4 py-3 font-bold text-gray-700">記事名</th>
+                      <th className="text-center px-4 py-3 font-bold text-gray-700">出題</th>
+                      <th className="text-right px-4 py-3 font-bold text-gray-700">ペア数</th>
+                      <th className="text-right px-4 py-3 font-bold text-gray-700">被リンク</th>
+                      <th className="text-right px-4 py-3 font-bold text-gray-700">30日PV</th>
+                      <th className="text-left px-4 py-3 font-bold text-gray-700">ドメイン</th>
                     </tr>
-                    {expanded === article.title && (
-                      <tr>
-                        <td colSpan={7} className="px-4 py-3 bg-slate-50">
-                          {pairsLoading ? (
-                            <div className="text-xs text-gray-500">ペア読み込み中...</div>
-                          ) : pairs.length === 0 ? (
-                            <div className="text-xs text-gray-500">連想ペアなし</div>
-                          ) : (
-                            <div className="space-y-1">
-                              {pairs.map((p) => (
-                                <div key={p.b} className="flex items-center gap-2 text-xs">
-                                  <span
-                                    className={`px-2 py-0.5 rounded-full font-bold ${BAND_BADGE[p.band] ?? ''}`}
-                                  >
-                                    {BAND_LABELS[p.band] ?? p.band}
-                                  </span>
-                                  <a
-                                    href={`https://ja.wikipedia.org/wiki/${encodeURIComponent(p.b)}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="font-medium text-gray-800 hover:underline"
-                                  >
-                                    {p.b}
-                                  </a>
-                                  <span className="text-gray-400">
-                                    bend {p.bendAb}/{p.bendBa}・duel {p.duel}・3手 {p.paths3Ab}/{p.paths3Ba}・{p.domRel}
-                                    {p.direct ? '・直結' : ''}
-                                  </span>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {articles.map((article) => (
+                      <React.Fragment key={article.title}>
+                        <tr
+                          className="hover:bg-gray-50 transition-colors cursor-pointer"
+                          onClick={() => toggleExpand(article.title)}
+                        >
+                          <td className="px-4 py-3 font-medium text-gray-900">
+                            <span className="inline-flex items-center gap-1">
+                              {expanded === article.title ? (
+                                <ChevronDown className="w-3 h-3 text-gray-400" />
+                              ) : (
+                                <ChevronRight className="w-3 h-3 text-gray-400" />
+                              )}
+                              {article.title}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {article.eligible ? (
+                              <span className="text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
+                                可
+                              </span>
+                            ) : (
+                              <span className="text-xs text-gray-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono text-gray-700">
+                            {article.pairCount.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono text-gray-700">
+                            {article.linksin.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono text-gray-700">
+                            {article.pageviews.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-600">
+                            {article.domains.join('・') || '—'}
+                          </td>
+                        </tr>
+                        {expanded === article.title && (
+                          <tr>
+                            <td colSpan={6} className="px-4 py-3 bg-slate-50">
+                              {pairsLoading ? (
+                                <div className="text-xs text-gray-500">ペア読み込み中...</div>
+                              ) : pairs.length === 0 ? (
+                                <div className="text-xs text-gray-500">連想ペアなし</div>
+                              ) : (
+                                <div className="space-y-1">
+                                  {pairs.map((p) => (
+                                    <div key={p.b} className="flex items-center gap-2 text-xs">
+                                      <span
+                                        className={`px-2 py-0.5 rounded-full font-bold ${BAND_BADGE[p.band] ?? ''}`}
+                                      >
+                                        {BAND_LABELS[p.band] ?? p.band}
+                                      </span>
+                                      <a
+                                        href={`https://ja.wikipedia.org/wiki/${encodeURIComponent(p.b)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="font-medium text-gray-800 hover:underline"
+                                      >
+                                        {p.b}
+                                      </a>
+                                      <span className="text-gray-400">
+                                        bend {p.bendAb}/{p.bendBa}・duel {p.duel}・3手 {p.paths3Ab}/{p.paths3Ba}・{p.domRel}
+                                        {p.direct ? '・直結' : ''}
+                                      </span>
+                                    </div>
+                                  ))}
                                 </div>
-                              ))}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-            {articles.length === 0 && (
-              <div className="text-center py-12 text-gray-500 text-sm">記事が見つかりません</div>
-            )}
-            {articles.length > 0 && (
-              <div className="text-center py-2 text-xs text-gray-400 border-t border-gray-100">
-                全{total.toLocaleString()}件中 {articles.length}件表示（行を押すとペア詳細）
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+                {articles.length === 0 && (
+                  <div className="text-center py-12 text-gray-500 text-sm">記事が見つかりません</div>
+                )}
+                {articles.length > 0 && (
+                  <div className="text-center py-2 text-xs text-gray-400 border-t border-gray-100">
+                    全{total.toLocaleString()}件中 {articles.length}件表示（行を押すとペア詳細）
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </>
+        )}
+
+        {tab === 'pairs' && (
+          <>
+            <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-100 mb-6">
+              <div className="flex gap-2 flex-wrap mb-2">
+                {BAND_ORDER.map((band) => (
+                  <button
+                    key={band}
+                    onClick={() => setPairBand(band)}
+                    className={`px-3 py-2 text-xs font-bold rounded-lg border transition-colors ${
+                      pairBand === band
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {BAND_LABELS[band]}
+                    {stats && <span className="ml-1 font-normal">({(stats.byBand[band] ?? 0).toLocaleString()})</span>}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500">{BAND_DESC[pairBand]}</p>
+            </div>
+
+            {bandLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="h-6 w-6 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-4 py-3 font-bold text-gray-700">ペア</th>
+                      <th className="text-right px-4 py-3 font-bold text-gray-700" title="両方向の踏み台記事数">中継ぎ</th>
+                      <th className="text-right px-4 py-3 font-bold text-gray-700" title="共通リンク先の数">共通リンク</th>
+                      <th className="text-left px-4 py-3 font-bold text-gray-700">ドメイン</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {bandPairs.map((p) => (
+                      <tr key={`${p.a}×${p.b}`} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 font-medium text-gray-900">
+                          <a href={`https://ja.wikipedia.org/wiki/${encodeURIComponent(p.a)}`} target="_blank" rel="noopener noreferrer" className="hover:underline">{p.a}</a>
+                          <span className="text-gray-400 mx-1.5">×</span>
+                          <a href={`https://ja.wikipedia.org/wiki/${encodeURIComponent(p.b)}`} target="_blank" rel="noopener noreferrer" className="hover:underline">{p.b}</a>
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono text-gray-700">
+                          {p.bendAb}/{p.bendBa}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono text-gray-700">{p.duel}</td>
+                        <td className="px-4 py-3 text-xs text-gray-600">{p.domRel}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {bandPairs.length === 0 && (
+                  <div className="text-center py-12 text-gray-500 text-sm">この帯のペアはありません</div>
+                )}
+                {bandPairs.length > 0 && (
+                  <div className="text-center py-2 text-xs text-gray-400 border-t border-gray-100">
+                    関連度の高い順に上位{bandPairs.length}件を表示
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

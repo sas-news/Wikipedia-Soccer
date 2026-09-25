@@ -1,28 +1,37 @@
-import { X, Target, Repeat, Globe, Lightbulb, Trophy } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { X, Target, Repeat, Globe, Lightbulb, Trophy, Github } from 'lucide-react';
 
-const SectionTitle = ({ icon: Icon, children }: { icon: any; children: React.ReactNode }) => (
+const SectionTitle = ({ icon: Icon, children }: { icon: typeof Trophy; children: ReactNode }) => (
   <h3 className="font-bold text-gray-900 text-base flex items-center gap-1.5">
     <Icon className="w-4 h-4 text-amber-600" /> {children}
   </h3>
 );
 
 const LINKS = [
-  { label: 'X (Twitter)', href: 'https://x.com/sas_shinbun', text: '@sas_shinbun' },
-  { label: 'ホームページ', href: 'https://sasnews.dev', text: 'sasnews.dev' },
-  { label: 'GitHub', href: 'https://github.com/sas-news/Wikipedia-Soccer', text: 'sas-news/Wikipedia-Soccer' },
+  { href: 'https://x.com/sas_shinbun', label: 'X: @sas_shinbun', glyph: '𝕏' },
+  { href: 'https://sasnews.dev', label: 'HP: sasnews.dev', glyph: 'globe' },
+  { href: 'https://github.com/sas-news/Wikipedia-Soccer', label: 'GitHub: sas-news/Wikipedia-Soccer', glyph: 'github' },
 ];
 
 export const CreatorLinks = () => (
-  <div className="flex flex-wrap justify-center gap-2 text-xs font-medium">
+  <div className="flex justify-center gap-3">
     {LINKS.map(l => (
       <a
         key={l.href}
         href={l.href}
         target="_blank"
         rel="noopener noreferrer"
-        className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-full transition-colors"
+        title={l.label}
+        aria-label={l.label}
+        className="w-9 h-9 flex items-center justify-center rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-colors"
       >
-        {l.label}: <span className="text-gray-900">{l.text}</span>
+        {l.glyph === 'globe' ? (
+          <Globe className="w-4 h-4" />
+        ) : l.glyph === 'github' ? (
+          <Github className="w-4 h-4" />
+        ) : (
+          <span className="text-sm font-black">𝕏</span>
+        )}
       </a>
     ))}
   </div>

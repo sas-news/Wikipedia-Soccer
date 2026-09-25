@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe, Loader2, HelpCircle, ArrowLeft, LogOut } from 'lucide-react';
+import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe, Loader2, HelpCircle, LogOut } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import ArticleInspector from './components/ArticleInspector';
 import RulesModal, { CreatorLinks } from './components/RulesModal';
+import BackButton from './components/BackButton';
 
 type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting' | 'inspector';
 
@@ -1088,12 +1089,12 @@ export default function App() {
               </div>
             )}
 
-            <button
-              onClick={() => isOnline ? exitOnlineToSettings() : setPhase('settings')}
-              className="w-full py-2 px-4 text-sm text-gray-500 hover:text-gray-800 font-bold transition-colors flex items-center justify-center gap-1.5"
-            >
-              <ArrowLeft className="w-4 h-4" /> {isOnline ? 'ルームを退出してトップへ' : '設定画面に戻る'}
-            </button>
+            <div className="flex justify-center">
+              <BackButton
+                onClick={() => isOnline ? exitOnlineToSettings() : setPhase('settings')}
+                label={isOnline ? 'ルームを退出してトップへ' : '設定画面に戻る'}
+              />
+            </div>
 
           </div>
          </div>
@@ -1131,12 +1132,9 @@ export default function App() {
             >
               {isJoining ? '参加中...' : 'ルームに参加 / 作成'}
             </button>
-            <button
-              onClick={() => setPhase('settings')}
-              className="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors"
-            >
-              戻る
-            </button>
+            <div className="flex justify-center pt-1">
+              <BackButton onClick={() => setPhase('settings')} />
+            </div>
             {toastMessage && (
               <div className="p-3 bg-red-100 text-red-800 rounded-lg text-sm text-center font-medium animate-in fade-in">
                 {toastMessage}
@@ -1155,12 +1153,9 @@ export default function App() {
           <Globe className="w-16 h-16 text-purple-600 mx-auto animate-pulse" />
           <h1 className="text-2xl font-bold text-gray-900">対戦相手を待っています...</h1>
           <p className="text-gray-600 font-medium">Room ID: <span className="font-bold text-purple-600">{roomId}</span></p>
-          <button
-            onClick={exitOnlineToSettings}
-            className="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors mt-4"
-          >
-            キャンセル
-          </button>
+          <div className="flex justify-center">
+            <BackButton onClick={exitOnlineToSettings} label="ルームを退出してトップへ" />
+          </div>
         </div>
       </div>
     );
@@ -1172,9 +1167,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex flex-col p-4">
         <div className="max-w-2xl w-full mx-auto space-y-4 pt-10">
           <div className="flex items-center gap-4 mb-6">
-             <button onClick={() => setPhase('settings')} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-50 transition-colors">
-               <RotateCcw className="w-5 h-5 text-gray-600" />
-             </button>
+             <BackButton onClick={() => setPhase('settings')} />
              <h1 className="text-2xl font-bold">プレイ履歴</h1>
           </div>
           {pastRecords.length === 0 ? (
