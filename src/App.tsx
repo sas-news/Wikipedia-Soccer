@@ -267,6 +267,9 @@ export default function App() {
       setIsOnline(true);
       setIsJoining(false);
       if (data.roomId) setRoomId(data.roomId);
+      // 別ルームへの入室では前ゲームの目標を持ち越さない（同室への復帰はsync_stateで即復元される）
+      setP1Target('');
+      setP2Target('');
 
       if (data.playerNum === 'spectator') {
         setPhase('online_waiting');
