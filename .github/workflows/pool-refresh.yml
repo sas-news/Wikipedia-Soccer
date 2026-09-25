@@ -40,9 +40,10 @@ jobs:
       - name: Precompute associative pairs
         run: npx tsx src/server/assoc.ts
 
-      # 空のままアーカイブを公開しないよう、プールが0件ならジョブを落とす
+      # 空や著しく縮小したアーカイブを公開しないよう、下限を設けて落とす
+      # （現行は pool_articles ~3,179 / assoc_pairs ~488,476。半減以下を異常とみなす）
       - name: Verify pool populated
-        run: npx tsx -e "import('./src/server/db').then(m => { m.initDatabase(); const db = m.getDb(); const n = db.prepare('SELECT COUNT(*) c FROM pool_articles').get().c; const p = db.prepare('SELECT COUNT(*) c FROM assoc_pairs').get().c; console.log('pool_articles:', n, 'assoc_pairs:', p); if (n === 0 || p === 0) process.exit(1) })"
+        run: npx tsx -e "import('./src/server/db').then(m => { m.initDatabase(); const db = m.getDb(); const n = db.prepare('SELECT COUNT(*) c FROM pool_articles').get().c; const p = db.prepare('SELECT COUNT(*) c FROM assoc_pairs').get().c; console.log('pool_articles:', n, 'assoc_pairs:', p); if (n < 1500 || p < 50000) { console.error('pool too small — 収集が途中で失敗した可能性'); process.exit(1) } })"
 
       - name: Compress DB
         run: gzip -kf data/difficulty.db
@@ -56,5 +57,7 @@ jobs:
             echo "no changes"
           else
             git commit -m "chore(data): refresh goal pool DB ($(date +%Y-%m-%d))"
+            # 収集中に main が進んでいる場合に備えて rebase してから push
+            git pull --rebase
             git push
           fi
