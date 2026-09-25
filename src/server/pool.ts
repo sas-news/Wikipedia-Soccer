@@ -401,6 +401,7 @@ export interface PoolArticleRow {
 export function getPoolArticleList(opts: {
   band?: PairBand;
   q?: string;
+  eligibleOnly?: boolean;
   limit?: number;
   offset?: number;
 }): { articles: PoolArticleRow[]; total: number } {
@@ -419,6 +420,9 @@ export function getPoolArticleList(opts: {
   if (band) {
     where.push('EXISTS (SELECT 1 FROM assoc_pairs ap WHERE ap.a = pool_articles.title AND ap.band = @band)');
     params.band = band;
+  }
+  if (opts.eligibleOnly) {
+    where.push('eligible = 1');
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const countSql = `SELECT COUNT(*) c FROM pool_articles ${whereSql}`;
@@ -450,6 +454,20 @@ export function getPoolArticleList(opts: {
       pairCount: r.pairCount,
     })),
   };
+}
+
+/** 帯別ペア一覧（内訳ページの「出題ペア」タブ用） */
+export function getPairsByBand(band: PairBand, limit = 60): AssocPair[] {
+  const db = getDb();
+  const safeLimit = Math.max(0, Math.min(limit, 200));
+  const rows = db
+    .prepare(
+      `SELECT * FROM assoc_pairs WHERE band = ? AND a < b
+       ORDER BY (bend_ab + bend_ba + duel + paths3_ab + paths3_ba) DESC
+       LIMIT ?`
+    )
+    .all(band, safeLimit) as any[];
+  return rows.map(rowToPair);
 }
 
 /** ある記事起点のペア一覧（帯→関連度順） */

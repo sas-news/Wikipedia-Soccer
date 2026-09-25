@@ -2,8 +2,9 @@
  * ゴールプール内訳API（連想ペアシステムの可視化用）
  *
  *   GET /api/pool/stats                    収録規模・帯分布・ドメイン分布
- *   GET /api/pool/articles?band=&q=&limit=  記事一覧（帯別ペア数つき）
+ *   GET /api/pool/articles?band=&q=&eligible=&limit=  記事一覧（帯別ペア数つき）
  *   GET /api/pool/pairs?a=<title>           ある記事起点のペア一覧
+ *   GET /api/pool/pairs?band=<band>         帯別のペア一覧
  */
 import { Router } from 'express';
 import {
@@ -12,6 +13,7 @@ import {
   getDomainCounts,
   getPoolArticleList,
   getPairsForArticle,
+  getPairsByBand,
 } from '../pool';
 import type { PairBand } from '../pool';
 
@@ -29,6 +31,7 @@ router.get('/pool/articles', (req, res) => {
     getPoolArticleList({
       band: BANDS.includes(band as PairBand) ? (band as PairBand) : undefined,
       q: req.query.q as string | undefined,
+      eligibleOnly: req.query.eligible === '1',
       limit: req.query.limit ? Number(req.query.limit) : undefined,
       offset: req.query.offset ? Number(req.query.offset) : undefined,
     })
@@ -36,9 +39,14 @@ router.get('/pool/articles', (req, res) => {
 });
 
 router.get('/pool/pairs', (req, res) => {
-  const a = req.query.a as string;
-  if (!a) return res.status(400).json({ error: 'a required' });
-  res.json({ pairs: getPairsForArticle(a, req.query.limit ? Number(req.query.limit) : undefined) });
+  const a = req.query.a as string | undefined;
+  const band = req.query.band as string | undefined;
+  const limit = req.query.limit ? Number(req.query.limit) : undefined;
+  if (a) return res.json({ pairs: getPairsForArticle(a, limit) });
+  if (band && BANDS.includes(band as PairBand)) {
+    return res.json({ pairs: getPairsByBand(band as PairBand, limit) });
+  }
+  res.status(400).json({ error: 'a or band required' });
 });
 
 export default router;

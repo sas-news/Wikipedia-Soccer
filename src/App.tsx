@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe, Loader2 } from 'lucide-react';
+import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe, Loader2, HelpCircle, LogOut } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import ArticleInspector from './components/ArticleInspector';
+import RulesModal, { CreatorLinks } from './components/RulesModal';
+import BackButton from './components/BackButton';
 
 type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting' | 'inspector';
 
@@ -88,6 +90,7 @@ export default function App() {
   const [pageLoaded, setPageLoaded] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
   const [peerLeft, setPeerLeft] = useState(false);
+  const [showRules, setShowRules] = useState(false);
   const isFiringRandomMove = useRef(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const toastTimer = useRef<number | null>(null);
@@ -237,6 +240,20 @@ export default function App() {
     if (on && s && r) {
       s.emit('sync_state', { roomId: r, state: newStatePart });
     }
+  };
+
+  // オンライン対戦から明示退出してトップへ戻る（相手には player_disconnected が届く）
+  const exitOnlineToSettings = () => {
+    const { socket: s, roomId: r } = latest.current;
+    s?.emit('leave_room', { roomId: r });
+    s?.disconnect();
+    setSocket(null);
+    setIsOnline(false);
+    setMyPlayerNum(null);
+    setPeerLeft(false);
+    setIsSuspended(false);
+    setUndoRequest(null);
+    setPhase('settings');
   };
 
   const joinRoom = () => {
@@ -873,6 +890,17 @@ export default function App() {
                 プレイ履歴を見る
               </button>
             )}
+
+            <button
+              onClick={() => setShowRules(true)}
+              className="w-full mt-3 py-3 px-4 bg-amber-50 border-2 border-amber-200 text-amber-700 font-bold rounded-xl shadow-sm hover:bg-amber-100 flex items-center justify-center gap-2 transition-colors"
+            >
+              <HelpCircle className="w-5 h-5" /> 遊び方・ルール
+            </button>
+
+            <div className="pt-4">
+              <CreatorLinks />
+            </div>
             
             {toastMessage && (
               <div className="p-3 bg-red-100 text-red-800 rounded-lg text-sm text-center font-medium animate-in fade-in">
@@ -881,6 +909,7 @@ export default function App() {
             )}
           </div>
         </div>
+        <RulesModal open={showRules} onClose={() => setShowRules(false)} />
       </div>
     );
   }
@@ -888,8 +917,9 @@ export default function App() {
   if (phase === 'setup') {
     if (isOnline && myPlayerNum === 'spectator') {
       return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-6 p-4">
           <div className="text-xl font-bold text-gray-600 animate-pulse">プレイヤーの設定を待っています...</div>
+          <BackButton onClick={exitOnlineToSettings} label="ルームを退出してトップへ" />
         </div>
       );
     }
@@ -1062,6 +1092,13 @@ export default function App() {
               </div>
             )}
 
+            <div className="flex justify-center">
+              <BackButton
+                onClick={() => isOnline ? exitOnlineToSettings() : setPhase('settings')}
+                label={isOnline ? 'ルームを退出してトップへ' : '設定画面に戻る'}
+              />
+            </div>
+
           </div>
          </div>
       </div>
@@ -1098,12 +1135,9 @@ export default function App() {
             >
               {isJoining ? '参加中...' : 'ルームに参加 / 作成'}
             </button>
-            <button
-              onClick={() => setPhase('settings')}
-              className="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors"
-            >
-              戻る
-            </button>
+            <div className="flex justify-center pt-1">
+              <BackButton onClick={() => setPhase('settings')} />
+            </div>
             {toastMessage && (
               <div className="p-3 bg-red-100 text-red-800 rounded-lg text-sm text-center font-medium animate-in fade-in">
                 {toastMessage}
@@ -1122,18 +1156,9 @@ export default function App() {
           <Globe className="w-16 h-16 text-purple-600 mx-auto animate-pulse" />
           <h1 className="text-2xl font-bold text-gray-900">対戦相手を待っています...</h1>
           <p className="text-gray-600 font-medium">Room ID: <span className="font-bold text-purple-600">{roomId}</span></p>
-          <button
-            onClick={() => {
-              if (socket) socket.disconnect();
-              setSocket(null);
-              setIsOnline(false);
-              setMyPlayerNum(null);
-              setPhase('settings');
-            }}
-            className="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors mt-4"
-          >
-            キャンセル
-          </button>
+          <div className="flex justify-center">
+            <BackButton onClick={exitOnlineToSettings} label="ルームを退出してトップへ" />
+          </div>
         </div>
       </div>
     );
@@ -1145,9 +1170,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex flex-col p-4">
         <div className="max-w-2xl w-full mx-auto space-y-4 pt-10">
           <div className="flex items-center gap-4 mb-6">
-             <button onClick={() => setPhase('settings')} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-50 transition-colors">
-               <RotateCcw className="w-5 h-5 text-gray-600" />
-             </button>
+             <BackButton onClick={() => setPhase('settings')} />
              <h1 className="text-2xl font-bold">プレイ履歴</h1>
           </div>
           {pastRecords.length === 0 ? (
@@ -1367,6 +1390,13 @@ emitStateUpdate({
           </div>
           
           <div className="flex items-center gap-2 w-full sm:w-auto justify-center">
+            <button
+              onClick={() => setShowRules(true)}
+              className="px-3 py-2 flex items-center gap-1.5 text-sm font-medium border border-amber-200 rounded-lg bg-amber-50 hover:bg-amber-100 transition-colors text-amber-700"
+              title="遊び方・ルール"
+            >
+              <HelpCircle className="w-4 h-4" /> <span className="hidden sm:inline">ルール</span>
+            </button>
             {!isSpectator && (
               <>
                 {isOnline ? (
@@ -1396,6 +1426,19 @@ emitStateUpdate({
                   </button>
                 )}
               </>
+            )}
+            {isOnline && (
+              <button
+                onClick={() => {
+                  if (isSpectator || window.confirm('対戦を終了してトップへ戻りますか？（相手の画面も閉じられます）')) {
+                    exitOnlineToSettings();
+                  }
+                }}
+                className="px-3 py-2 flex items-center gap-1.5 text-sm font-medium border border-red-200 rounded-lg bg-white hover:bg-red-50 transition-colors text-red-600"
+                title={isSpectator ? '観戦を終了してトップへ' : '対戦を終了してトップへ'}
+              >
+                <LogOut className="w-4 h-4" /> <span className="hidden sm:inline">退出</span>
+              </button>
             )}
             {isMyTurn && !isSuspended && (
               <>
@@ -1461,15 +1504,7 @@ emitStateUpdate({
             <h2 className="text-xl font-bold text-gray-900">相手との通信が切れました</h2>
             <p className="text-gray-600">同じ Room ID で復帰すると対戦を再開できます</p>
             <button
-              onClick={() => {
-                socket?.emit('leave_room', { roomId });
-                socket?.disconnect();
-                setSocket(null);
-                setIsOnline(false);
-                setPeerLeft(false);
-                setMyPlayerNum(null);
-                setPhase('settings');
-              }}
+              onClick={exitOnlineToSettings}
               className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-lg"
             >
               待たずにタイトルへ戻る
@@ -1606,6 +1641,8 @@ emitStateUpdate({
           className="w-full h-full border-0 absolute inset-0"
         />
       </div>
+
+      <RulesModal open={showRules} onClose={() => setShowRules(false)} />
     </div>
   );
 }
