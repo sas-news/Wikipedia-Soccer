@@ -98,16 +98,20 @@ async function startServer() {
   const explicitQuit = new Set<string>();
   // プレイヤー席が回線断で空いている部屋（フェーズに関係なく復帰を検知するため）
   const roomPeerGone = new Set<string>();
-  // 席の請求: 切断しても token を一定時間保持し、復帰を優先する
+  // 席の請求: 切断しても token を一定時間保持し、復帰を優先する。
+  // キーは `${roomId}:${seat}` で席ごと独立（両者同時断で上書きされないよう）
   const SEAT_CLAIM_MS = 10 * 60 * 1000;
-  const seatClaims = new Map<string, { seat: 'p1' | 'p2'; token: string; until: number }>();
+  const seatClaims = new Map<string, { token: string; until: number }>();
+  const claimKey = (roomId: string, seat: 'p1' | 'p2') => `${roomId}:${seat}`;
   const newRoomSeats = (): RoomSeats => ({
     p1: { sid: null, token: null },
     p2: { sid: null, token: null },
   });
 
   /** sync_state を受信者ロール別にフィルタする。
-   *  ゴールは相手・観戦者には見せない（ゲーム中のみ）。'won' では全公開（惜敗側の情報表示用）。 */
+   *  ゴールは観戦者には送らない。プレイヤー同士は両方のゴールを受け取る
+   * （開始手続き・対称スタート選択・レコード作成が相手ゴールに依存するため）。
+   *  UI上の秘匿はHiddenTargetItemのマスクで担保する。'won' では全公開。 */
   const TARGET_KEYS = ['p1Target', 'p2Target', 'pairTargets'];
   function filterStateForRole(
     roomId: string,
@@ -116,23 +120,13 @@ async function startServer() {
   ): Record<string, unknown> {
     const merged = roomStates.get(roomId) ?? {};
     const phase = (state.phase as string | undefined) ?? (merged.phase as string | undefined);
-    if (phase === 'won') return { ...state }; // 終局後は両ゴールを公開
-    const out = { ...state };
-    const pairTargets = (out.pairTargets ?? merged.pairTargets) as { a?: string; b?: string } | undefined;
-    delete out.pairTargets;
+    if (phase === 'won') return { ...state }; // 終局後は観戦者にも公開（結果画面用）
     if (!role || role === 'spectator') {
+      const out = { ...state };
       for (const k of TARGET_KEYS) delete out[k];
       return out;
     }
-    // 本人には自分のゴールだけを ownTarget として届ける（相手ゴールは送らない）
-    const own =
-      role === 1
-        ? (pairTargets?.a ?? out.p1Target ?? merged.p1Target)
-        : (pairTargets?.b ?? out.p2Target ?? merged.p2Target);
-    delete out.p1Target;
-    delete out.p2Target;
-    if (own !== undefined) out.ownTarget = own;
-    return out;
+    return { ...state };
   }
 
   /** roomId 内の全ソケット（送信者除く）にロール別フィルタ済み sync_state を配信 */
@@ -189,16 +183,15 @@ async function startServer() {
       }
 
       // 席の請求権: 同 token の復帰は常に優先、他人は claim 期限切れ後のみ着席可
-      const claim = seatClaims.get(roomId);
-      const claimActive = !!claim && Date.now() < claim.until;
       const tryTake = (seatKey: 'p1' | 'p2'): boolean => {
         const seat = seats![seatKey];
+        const claim = seatClaims.get(claimKey(roomId, seatKey));
+        const claimActive = !!claim && Date.now() < claim.until;
         // 席の token と一致すれば本人とみなす（claim 有無に関わらず奪還可。
         // 接続断の検知前に復帰した場合も元の席に戻れる）
         const tokenMatches = !!token && seat.token === token;
-        const claimedHere = claimActive && claim!.seat === seatKey;
-        const canReclaim = tokenMatches || (claimedHere && !!token && claim!.token === token);
-        if (claimedHere && !canReclaim) return false; // 他人の請求が残る席は取れない
+        const canReclaim = tokenMatches || (claimActive && !!token && claim!.token === token);
+        if (claimActive && !canReclaim) return false; // 他人の請求が残る席は取れない
         if (seat.sid) return canReclaim; // 占有席は本人のみ奪還可
         seat.sid = socket.id;
         seat.token = token;
@@ -226,7 +219,7 @@ async function startServer() {
             ghost.disconnect(true);
           }
         }
-        seatClaims.delete(roomId);
+        seatClaims.delete(claimKey(roomId, playerNum === 1 ? 'p1' : 'p2'));
       }
 
       socket.join(roomId);
@@ -268,8 +261,20 @@ async function startServer() {
       if (!throttleMid(socket.id)) return;
       // 部分更新をマージして保持: 途中参加者・復帰者に完全な状態を届けるため
       const prev = roomStates.get(data.roomId) || {};
-      roomStates.set(data.roomId, { ...prev, ...(data.state || {}) });
-      relaySyncState(socket.id, data.roomId, data.state || {});
+      const incoming = data.state || {};
+      const next = { ...prev, ...incoming };
+      // ゴールの新旧を整合: 新しいペア抽選は個別編集を打ち消し、個別編集は該当席のペア値を無効化
+      const pt = next.pairTargets as { a?: string; b?: string } | undefined;
+      if (incoming.pairTargets !== undefined) {
+        delete next.p1Target;
+        delete next.p2Target;
+      } else if (pt) {
+        if (incoming.p1Target !== undefined) delete pt.a;
+        if (incoming.p2Target !== undefined) delete pt.b;
+        if (pt.a === undefined && pt.b === undefined) delete next.pairTargets;
+      }
+      roomStates.set(data.roomId, next);
+      relaySyncState(socket.id, data.roomId, incoming);
     });
 
     socket.on('sync_scroll', (data: { roomId?: unknown } | undefined) => {
@@ -316,14 +321,14 @@ async function startServer() {
 
     socket.on('sync_record', (data: { roomId?: unknown; record?: unknown } | undefined) => {
       if (!data || !playerInRoom(data.roomId)) return;
-      // 勝者は相手ゴールを知らないため、ルームが保持するペア情報で欠損を補完する
-      const rec = { ...(data.record as Record<string, unknown>) };
       const merged = roomStates.get(data.roomId);
-      if (merged) {
-        const pt = (merged.pairTargets ?? {}) as { a?: string; b?: string };
-        if (!rec.p1Target) rec.p1Target = pt.a ?? merged.p1Target ?? '';
-        if (!rec.p2Target) rec.p2Target = pt.b ?? merged.p2Target ?? '';
-      }
+      // 終局前の記録送信は不正（ゴール漏洩・履歴汚染を防ぐため無視）
+      if (merged?.phase !== 'won') return;
+      // 欠損したゴール欄をルームの状態で補完する
+      const rec = { ...(data.record as Record<string, unknown>) };
+      const pt = (merged.pairTargets ?? {}) as { a?: string; b?: string };
+      if (!rec.p1Target) rec.p1Target = pt.a ?? merged.p1Target ?? '';
+      if (!rec.p2Target) rec.p2Target = pt.b ?? merged.p2Target ?? '';
       const records = roomRecords.get(data.roomId) || [];
       records.unshift(rec);
       roomRecords.set(data.roomId, records.slice(0, 50));
@@ -342,8 +347,7 @@ async function startServer() {
         const seat = seats[seatKey];
         if (seat.sid === socket.id) {
           // 席は空けるが token の請求は残し、同 token の復帰を優先する
-          seatClaims.set(roomId, {
-            seat: seatKey,
+          seatClaims.set(claimKey(roomId, seatKey), {
             token: seat.token ?? '',
             until: Date.now() + SEAT_CLAIM_MS,
           });
@@ -364,7 +368,8 @@ async function startServer() {
         roomRecords.delete(roomId);
         roomSuspended.delete(roomId);
         roomPeerGone.delete(roomId);
-        seatClaims.delete(roomId);
+        seatClaims.delete(claimKey(roomId, 'p1'));
+        seatClaims.delete(claimKey(roomId, 'p2'));
       }
     });
 
@@ -420,7 +425,8 @@ async function startServer() {
             const finalTitle = decodeURIComponent(m[1]);
             return res.redirect(302, `/proxy/wiki/${encodeURIComponent(finalTitle)}`);
           }
-          return res.redirect(302, loc);
+          // /wiki/ 以外へのリダイレクト（外部ホスト等）は信用せず追わない
+          return res.status(502).send('Unexpected redirect from Wikipedia');
         }
 
         if (!response.ok) {

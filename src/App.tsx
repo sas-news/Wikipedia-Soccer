@@ -131,25 +131,20 @@ export default function App() {
     if (!socket) return;
 
     socket.on('sync_state', (state: any) => {
-      const me = latest.current.myPlayerNum;
       if (state.startPageMode !== undefined) setStartPageMode(state.startPageMode);
       if (state.customStartPage !== undefined) setCustomStartPage(state.customStartPage);
       if (state.movesPhase1 !== undefined) setMovesPhase1(state.movesPhase1);
       if (state.movesPhaseN !== undefined) setMovesPhaseN(state.movesPhaseN);
       if (state.turnTimeLimit !== undefined) setTurnTimeLimit(state.turnTimeLimit);
       if (state.moveTimeLimit !== undefined) setMoveTimeLimit(state.moveTimeLimit);
-      // サーバーがロール別に自分のゴールだけを ownTarget として返す（相手ゴールは来ない）
-      if (state.ownTarget !== undefined) {
-        if (me === 1) setP1Target(state.ownTarget);
-        if (me === 2) setP2Target(state.ownTarget);
-      }
-      if (state.p1Target !== undefined && me !== 1) setP1Target(state.p1Target);
-      if (state.p2Target !== undefined && me !== 2) setP2Target(state.p2Target);
-      // 終局時は両ゴールが全員に公開される（結果画面の表示用）
+      // ペア抽選値は先に適用し、個別編集(p1Target等)は後に適用＝新しい方が勝つ。
+      // サーバー側で無効化された席のエントリは undefined になるため各フィールドを確認
       if (state.pairTargets !== undefined) {
-        setP1Target(state.pairTargets.a);
-        setP2Target(state.pairTargets.b);
+        if (state.pairTargets.a !== undefined) setP1Target(state.pairTargets.a);
+        if (state.pairTargets.b !== undefined) setP2Target(state.pairTargets.b);
       }
+      if (state.p1Target !== undefined) setP1Target(state.p1Target);
+      if (state.p2Target !== undefined) setP2Target(state.p2Target);
       if (state.currentPlayer !== undefined) setCurrentPlayer(state.currentPlayer);
       if (state.turnCount !== undefined) setTurnCount(state.turnCount);
       if (state.movesMade !== undefined) setMovesMade(state.movesMade);
@@ -286,10 +281,12 @@ export default function App() {
 
   // 席の本人証明: 端末に保存するランダムトークンで回線断からの席復帰を可能にする
   const seatToken = () => {
-    let t = localStorage.getItem('wiki_soccer_seat_token');
+    // sessionStorageにすることでタブごとに固有の身分になる（2タブでの対戦が可能）。
+    // リロードでは値が残るので席の復帰は引き続き機能し、タブを閉じると権利は放棄される
+    let t = sessionStorage.getItem('wiki_soccer_seat_token');
     if (!t) {
       t = crypto.randomUUID();
-      localStorage.setItem('wiki_soccer_seat_token', t);
+      sessionStorage.setItem('wiki_soccer_seat_token', t);
     }
     return t;
   };
@@ -404,9 +401,12 @@ export default function App() {
   };
 
   // 共有リンク ?room= で開いたらそのまま参加
+  // StrictModeのマウント2回実行で二重join→自分のソケットをevictしないようrefで一度だけ
+  const autoJoinAttempted = useRef(false);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search).get('room');
-    if (q) {
+    if (q && !autoJoinAttempted.current) {
+      autoJoinAttempted.current = true;
       setRoomId(q);
       setPhase('online_setup');
       joinRoom(q);
