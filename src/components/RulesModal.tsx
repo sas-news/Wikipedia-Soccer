@@ -114,7 +114,7 @@ export default function RulesModal({ open, onClose }: { open: boolean; onClose: 
             <p>
               Wikipediaの記事どうしを<b>リンクをクリックして移動</b>していく2人対戦ゲーム。
               同じスタートページから出発して、<b>相手より先に自分のゴール記事にたどり着いた人が勝ち</b>です。
-              ゴールに「近づく」ほど相手に妨害されるので、駆け引きが生まれます。
+              ターン交代すると相手からの妨害が始まるので、いかにターン内でゴールに近づくかが大切です。
             </p>
             <div className="bg-slate-50 rounded-xl border border-gray-200 p-3">
               <Diagram />
@@ -127,7 +127,7 @@ export default function RulesModal({ open, onClose }: { open: boolean; onClose: 
               <li><b>ペアで出題</b>: 「やさしい / ちょうど良い / 難しい」から、連想距離がちょうど良い記事の組を自動抽選（おすすめ）</li>
               <li><b>手入力</b>: 各プレイヤーが自分のゴール記事を自由に指定</li>
             </ul>
-            <p className="text-xs text-gray-500">相手のゴールは秘密 — 自分のゴールだけが分かればOK。</p>
+            <p className="text-xs text-gray-500">相手のゴールは秘密 — 自分のゴールだけが分かる。</p>
           </section>
 
           <section className="space-y-2">
@@ -137,9 +137,10 @@ export default function RulesModal({ open, onClose }: { open: boolean; onClose: 
             </div>
             <ul className="list-disc pl-5 space-y-1">
               <li>ページ内の<b>リンクをクリック＝1移動</b>。1ターンに動ける回数は設定で決まる（初期: 1ターン目1回 / 以降2回）</li>
-              <li>回数を使い切るとターン終了。<b>自分のターン中に自分のゴールへ到達すれば勝利</b></li>
-              <li>迷ったら<b>「戻る」</b>で1手前に戻れる（ターン内のみ。オンライン対戦では相手の承認が必要）</li>
-              <li>制限時間を設定すると、時間切れでターン交代（または1移動ごとの秒数制限）</li>
+              <li>右上のボタンからターン終了。<b>自分のターン中に自分のゴールへ到達すれば勝利</b></li>
+              <li>移動を使い切っても、ターン終了前にゴールページへの移動が可能(大切)</li>
+              <li>操作ミスをした時は<b>「戻る」</b>で1手前に戻れる（ターン内のみ。相手の承認が必要）</li>
+              <li>制限時間を設定すると、時間切れでターン消費</li>
             </ul>
           </section>
 
@@ -155,9 +156,10 @@ export default function RulesModal({ open, onClose }: { open: boolean; onClose: 
           <section className="space-y-2">
             <SectionTitle icon={Lightbulb}>コツ</SectionTitle>
             <ul className="list-disc pl-5 space-y-1">
-              <li>いきなりゴールを目指さず、<b>大きなテーマ（「スポーツ」「日本」など）を経由</b>すると道が開けやすい</li>
-              <li>相手がゴールに近づいたら、リンクを辿って<b>妨害</b>しよう — ページの占有は共有</li>
-              <li>「目標確認」ボタンを<b>押している間だけ</b>自分のゴールを確認できる（相手に見られないよう配慮）</li>
+              <li><b>大きなテーマ（「スポーツ」「日本」など）を経由</b>すると道が開けやすい</li>
+              <li>自分のゴールとはかけ離れた妨害することもOK</li>
+              <li>忘れた時は「目標確認」ボタンを押して自分のゴールを確認できる（相手に見られないよう注意）</li>
+              <li>目標ページの自動抽選はまだ精度が低いので第三者のチェックをすると安心</li>
             </ul>
           </section>
 
