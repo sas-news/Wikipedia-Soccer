@@ -103,14 +103,18 @@ export default function ArticleInspector({ onBack }: Props) {
 
   useEffect(() => {
     if (tab !== 'pairs') return;
+    const ctrl = new AbortController();
     setBandLoading(true);
-    fetch(`/api/pool/pairs?band=${pairBand}&limit=60`)
+    fetch(`/api/pool/pairs?band=${pairBand}&limit=60`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
         setBandPairs(d.pairs || []);
         setBandLoading(false);
       })
-      .catch(() => setBandLoading(false));
+      .catch((e) => {
+        if (e?.name !== 'AbortError') setBandLoading(false);
+      });
+    return () => ctrl.abort();
   }, [tab, pairBand]);
 
   const expandedRef = useRef<string | null>(null);
