@@ -72,7 +72,6 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showTarget, setShowTarget] = useState(false);
   const [hasSaveData, setHasSaveData] = useState(false);
-  const [hasReachedConfirm, setHasReachedConfirm] = useState(false);
 
   // Online Multiplayer State
   const [isOnline, setIsOnline] = useState(false);
@@ -88,8 +87,26 @@ export default function App() {
   const [navCounter, setNavCounter] = useState(0);
   const [pageLoaded, setPageLoaded] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const [peerLeft, setPeerLeft] = useState(false);
   const isFiringRandomMove = useRef(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const toastTimer = useRef<number | null>(null);
+
+  // socketハンドラ等の長寿命クロージャから最新状態を読むためのミラー
+  const latest = useRef({
+    phase, currentPlayer, myPlayerNum, isOnline, isSuspended, peerLeft,
+    currentPage, currentTarget: '', movesMade, maxMoves: 0,
+    turnHistory, globalHistory, timeLeft, turnTimeLimit, moveTimeLimit,
+    p1Target, p2Target, socket, roomId, winner,
+  });
+  useEffect(() => {
+    latest.current = {
+      phase, currentPlayer, myPlayerNum, isOnline, isSuspended, peerLeft,
+      currentPage, currentTarget, movesMade, maxMoves,
+      turnHistory, globalHistory, timeLeft, turnTimeLimit, moveTimeLimit,
+      p1Target, p2Target, socket, roomId, winner,
+    };
+  });
 
   useEffect(() => {
     setHasSaveData(!!localStorage.getItem(SAVE_KEY));
@@ -102,18 +119,20 @@ export default function App() {
   }, [currentPage]);
 
   // Online Multiplayer Socket Logic
+  // ハンドラはsocketの作成時に1度だけ登録し、可変の状態はlatest経由で読む
   useEffect(() => {
     if (!socket) return;
-    
+
     socket.on('sync_state', (state: any) => {
+      const me = latest.current.myPlayerNum;
       if (state.startPageMode !== undefined) setStartPageMode(state.startPageMode);
       if (state.customStartPage !== undefined) setCustomStartPage(state.customStartPage);
       if (state.movesPhase1 !== undefined) setMovesPhase1(state.movesPhase1);
       if (state.movesPhaseN !== undefined) setMovesPhaseN(state.movesPhaseN);
       if (state.turnTimeLimit !== undefined) setTurnTimeLimit(state.turnTimeLimit);
       if (state.moveTimeLimit !== undefined) setMoveTimeLimit(state.moveTimeLimit);
-      if (state.p1Target !== undefined && myPlayerNum !== 1) setP1Target(state.p1Target);
-      if (state.p2Target !== undefined && myPlayerNum !== 2) setP2Target(state.p2Target);
+      if (state.p1Target !== undefined && me !== 1) setP1Target(state.p1Target);
+      if (state.p2Target !== undefined && me !== 2) setP2Target(state.p2Target);
       // ペア抽選は両者のゴールの共有更新として扱い、P2側のクライアントにも適用する
       if (state.pairTargets !== undefined) {
         setP1Target(state.pairTargets.a);
@@ -135,27 +154,38 @@ export default function App() {
     });
 
     socket.on('sync_scroll', (data: { scrollY: number }) => {
-      if (myPlayerNum !== currentPlayer) {
-        // Send to iframe
-        const iframe = document.querySelector('iframe');
-        if (iframe && iframe.contentWindow) {
-          iframe.contentWindow.postMessage({ type: 'SYNC_SCROLL', scrollY: data.scrollY }, '*');
-        }
+      if (latest.current.myPlayerNum !== latest.current.currentPlayer) {
+        iframeRef.current?.contentWindow?.postMessage({ type: 'SYNC_SCROLL', scrollY: data.scrollY }, '*');
       }
     });
 
     socket.on('sync_cursor', (data: { x: number, y: number }) => {
-      if (myPlayerNum !== currentPlayer) {
+      if (latest.current.myPlayerNum !== latest.current.currentPlayer) {
         setCursorPos({ x: data.x, y: data.y });
       }
     });
 
-    socket.on('player_disconnected', (id) => {
-      showToast('相手が通信を切断しました。タイトルに戻ります。');
+    // プレイヤーの回線断: 復帰を待つ（観戦者の出入りでは来ない）
+    socket.on('peer_left', () => {
+      setPeerLeft(true);
+      setUndoRequest(null);
+      showToast('相手との通信が切れました。復帰を待っています...');
+    });
+
+    socket.on('peer_rejoined', () => {
+      setPeerLeft(false);
+      showToast('相手が復帰しました');
+    });
+
+    // 明示退出のみここに来る（回線断はpeer_left）
+    socket.on('player_disconnected', () => {
+      showToast('相手が退出しました。タイトルに戻ります。');
       setPhase('settings');
-      if (socket) socket.disconnect();
+      socket.disconnect();
       setSocket(null);
       setIsOnline(false);
+      setPeerLeft(false);
+      setMyPlayerNum(null);
     });
 
     socket.on('suspend', () => {
@@ -190,6 +220,8 @@ export default function App() {
       socket.off('sync_state');
       socket.off('sync_scroll');
       socket.off('sync_cursor');
+      socket.off('peer_left');
+      socket.off('peer_rejoined');
       socket.off('player_disconnected');
       socket.off('suspend');
       socket.off('resume');
@@ -198,14 +230,12 @@ export default function App() {
       socket.off('undo_deny');
       socket.off('sync_records');
     };
-  }, [socket, myPlayerNum, currentPlayer]);
+  }, [socket]);
 
   const emitStateUpdate = (newStatePart: any) => {
-    if (isOnline && socket && roomId) {
-      socket.emit('sync_state', {
-        roomId,
-        state: newStatePart
-      });
+    const { isOnline: on, socket: s, roomId: r } = latest.current;
+    if (on && s && r) {
+      s.emit('sync_state', { roomId: r, state: newStatePart });
     }
   };
 
@@ -219,17 +249,27 @@ export default function App() {
     const newSocket = io();
     setSocket(newSocket);
 
-    newSocket.emit('join_room', roomId);
+    // サーバー側と同じ正規化を行い、以後のemitは正規化後のIDで送る
+    const rid = roomId.trim().slice(0, 64);
+    setRoomId(rid);
+    // 自動再接続（transport復帰）でも部屋に入り直す。初回connectもここで送られる
+    newSocket.on('connect', () => {
+      newSocket.emit('join_room', rid);
+    });
     newSocket.on('room_full', () => {
       showToast('ルームが満員です');
       newSocket.disconnect();
       setSocket(null);
       setIsJoining(false);
     });
-    newSocket.on('joined', (data: { playerNum: 1 | 2 | 'spectator' }) => {
+    newSocket.on('joined', (data: { playerNum: 1 | 2 | 'spectator'; roomId?: string }) => {
       setMyPlayerNum(data.playerNum);
       setIsOnline(true);
       setIsJoining(false);
+      if (data.roomId) setRoomId(data.roomId);
+      // 別ルームへの入室では前ゲームの目標を持ち越さない（同室への復帰はsync_stateで即復元される）
+      setP1Target('');
+      setP2Target('');
 
       if (data.playerNum === 'spectator') {
         setPhase('online_waiting');
@@ -242,9 +282,10 @@ export default function App() {
         setPhase('setup');
         setP1Ready(false);
         setP2Ready(false);
+        setPeerLeft(false);
         if (data.playerNum === 1) {
           newSocket.emit('sync_state', {
-            roomId,
+            roomId: rid,
             state: {
               startPageMode,
               customStartPage,
@@ -267,7 +308,8 @@ export default function App() {
 
   const showToast = (message: string) => {
     setToastMessage(message);
-    setTimeout(() => setToastMessage(null), 4000);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastMessage(null), 4000);
   };
 
   const handleReady = (player: 1 | 2) => {
@@ -310,9 +352,9 @@ export default function App() {
 
   const fetchTrueRandom = async (): Promise<string> => {
     const res = await fetch('/api/random');
-    const data = await res.json();
-    if (data.fallback && data.message) {
-      showToast(data.message);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.title) {
+      throw new Error('random fetch failed');
     }
     return data.title;
   };
@@ -379,6 +421,9 @@ export default function App() {
         winner: null,
         timeLeft: initialTimeLeft,
         phase: 'playing',
+        // pairTargets経由で共有しておくと、途中復帰したプレイヤーが
+        // 自分のゴールも正しく復元できる（単独キーは自分の入力欄を守るためフィルタされる）
+        pairTargets: { a: p1Target, b: p2Target },
         p1Target,
         p2Target
       });
@@ -391,8 +436,8 @@ export default function App() {
 
   const handleLinkClick = (rawTitle: string) => {
     if (phase !== 'playing') return;
-    if (isSuspended) {
-      showToast('中断中は操作できません');
+    if (isSuspended || peerLeft) {
+      showToast(isSuspended ? '中断中は操作できません' : '相手の復帰を待っています');
       return;
     }
     if (isOnline && myPlayerNum !== currentPlayer) {
@@ -432,7 +477,7 @@ export default function App() {
         p1Target,
         p2Target,
         history: finalHistory,
-        startPage: globalHistory[0].title
+        startPage: globalHistory[0]?.title ?? currentPage
       };
       const pastRecords = JSON.parse(localStorage.getItem('wiki_soccer_past_records') || '[]');
       const newRecords = [record, ...pastRecords].slice(0, 50);
@@ -456,13 +501,23 @@ export default function App() {
     setCurrentPage(decodedTitle);
     setMovesMade(m => m + 1);
     setNavCounter(c => c + 1);
+    const newTimeLeft = moveTimeLimit > 0 ? moveTimeLimit : timeLeft;
     if (moveTimeLimit > 0) {
       setTimeLeft(moveTimeLimit);
     }
-    setGlobalHistory(h => [...h, { title: decodedTitle, player: currentPlayer }]);
-    setTurnHistory(th => [...th, decodedTitle]);
+    const newGlobal = [...globalHistory, { title: decodedTitle, player: currentPlayer }];
+    const newTurn = [...turnHistory, decodedTitle];
+    setGlobalHistory(newGlobal);
+    setTurnHistory(newTurn);
     isFiringRandomMove.current = false;
-    emitStateUpdate({ currentPage: decodedTitle, movesMade: movesMade + 1, timeLeft: moveTimeLimit > 0 ? moveTimeLimit : timeLeft });
+    // 移動履歴も同期する（相手側の履歴が腐らないよう毎手送る）
+    emitStateUpdate({
+      currentPage: decodedTitle,
+      movesMade: movesMade + 1,
+      timeLeft: newTimeLeft,
+      globalHistory: newGlobal,
+      turnHistory: newTurn,
+    });
   };
 
   useEffect(() => {
@@ -503,12 +558,12 @@ export default function App() {
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [movesMade, maxMoves, currentTarget, currentPlayer, phase, isOnline, myPlayerNum, socket, roomId, currentPage]);
+  }, [movesMade, maxMoves, currentTarget, currentPlayer, phase, isOnline, myPlayerNum, socket, roomId, currentPage, isSuspended, peerLeft, globalHistory, turnHistory]);
 
   const handleEndTurn = () => {
     isFiringRandomMove.current = false;
     if (isOnline && myPlayerNum !== currentPlayer) return;
-    if (isSuspended) return;
+    if (isSuspended || peerLeft) return;
     const nextPlayer = currentPlayer === 1 ? 2 : 1;
     const newTimeLeft = turnTimeLimit > 0 ? turnTimeLimit : moveTimeLimit;
     setCurrentPlayer(nextPlayer);
@@ -520,7 +575,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (phase !== 'playing' || isSuspended) return;
+    if (phase !== 'playing' || isSuspended || peerLeft) return;
     if (!pageLoaded) return;
 
     const limit = turnTimeLimit > 0 ? turnTimeLimit : moveTimeLimit;
@@ -552,36 +607,31 @@ export default function App() {
     }, 1000);
 
     return () => clearTimeout(timerId);
-  }, [timeLeft, phase, turnTimeLimit, moveTimeLimit, currentPage, currentPlayer, isSuspended, movesMade, maxMoves, pageLoaded]);
+  }, [timeLeft, phase, turnTimeLimit, moveTimeLimit, currentPage, currentPlayer, isSuspended, peerLeft, movesMade, maxMoves, pageLoaded]);
 
-const executeUndo = () => {
+  // undo_acceptハンドラからも呼ばれるため、可変状態はlatest経由で読む
+  const executeUndo = () => {
     isFiringRandomMove.current = false;
-    setTurnHistory(prev => {
-      if (prev.length <= 1) return prev;
-      const newHistory = [...prev];
-      newHistory.pop();
-      const previousPage = newHistory[newHistory.length - 1];
+    const { turnHistory: th, globalHistory: gh, movesMade: mm, moveTimeLimit: mtl } = latest.current;
+    if (th.length <= 1) return;
+    const newHistory = th.slice(0, -1);
+    const previousPage = newHistory[newHistory.length - 1];
+    const newGlobal = gh.slice(0, -1);
+    const newMoves = Math.max(0, mm - 1);
 
-      setCurrentPage(previousPage);
-      setMovesMade(m => Math.max(0, m - 1));
-      setNavCounter(c => c + 1);
-      if (moveTimeLimit > 0) {
-        setTimeLeft(moveTimeLimit);
-      }
+    setTurnHistory(newHistory);
+    setGlobalHistory(newGlobal);
+    setCurrentPage(previousPage);
+    setMovesMade(newMoves);
+    setNavCounter(c => c + 1);
+    if (mtl > 0) setTimeLeft(mtl);
 
-      setGlobalHistory(g => {
-        const newGlobal = [...g];
-        newGlobal.pop();
-        emitStateUpdate({ currentPage: previousPage, turnHistory: newHistory, movesMade: movesMade > 0 ? movesMade - 1 : 0, globalHistory: newGlobal });
-        return newGlobal;
-      });
-      return newHistory;
-    });
+    emitStateUpdate({ currentPage: previousPage, turnHistory: newHistory, movesMade: newMoves, globalHistory: newGlobal });
   };
 
   const handleUndo = () => {
     if (isOnline && myPlayerNum !== currentPlayer) return;
-    if (isSuspended) return;
+    if (isSuspended || peerLeft) return;
     if (turnHistory.length <= 1) return;
     
     if (isOnline) {
@@ -630,10 +680,12 @@ const executeUndo = () => {
     localStorage.setItem(SAVE_KEY, JSON.stringify(stateToSave));
     setHasSaveData(true);
     if (isOnline) {
-      socket?.emit('player_disconnected', { roomId });
+      socket?.emit('leave_room', { roomId });
       socket?.disconnect();
       setSocket(null);
       setIsOnline(false);
+      setPeerLeft(false);
+      setMyPlayerNum(null);
     }
     setPhase('settings');
     showToast('ゲームを保存して中断しました');
@@ -1075,6 +1127,7 @@ const executeUndo = () => {
               if (socket) socket.disconnect();
               setSocket(null);
               setIsOnline(false);
+              setMyPlayerNum(null);
               setPhase('settings');
             }}
             className="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors mt-4"
@@ -1399,6 +1452,32 @@ emitStateUpdate({
         </div>
       )}
 
+      {peerLeft && (
+        <div className="absolute inset-0 z-40 bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 text-center space-y-4 max-w-sm mx-4">
+            <div className="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center">
+              <Globe className="w-8 h-8 text-red-600 animate-pulse" />
+            </div>
+            <h2 className="text-xl font-bold text-gray-900">相手との通信が切れました</h2>
+            <p className="text-gray-600">同じ Room ID で復帰すると対戦を再開できます</p>
+            <button
+              onClick={() => {
+                socket?.emit('leave_room', { roomId });
+                socket?.disconnect();
+                setSocket(null);
+                setIsOnline(false);
+                setPeerLeft(false);
+                setMyPlayerNum(null);
+                setPhase('settings');
+              }}
+              className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold rounded-lg"
+            >
+              待たずにタイトルへ戻る
+            </button>
+          </div>
+        </div>
+      )}
+
       {undoRequest && undoRequest.fromPlayer !== myPlayerNum && (
         <div className="absolute inset-0 z-40 bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
           <div className="bg-white rounded-2xl shadow-2xl p-8 text-center space-y-4 max-w-sm mx-4">
@@ -1491,12 +1570,11 @@ emitStateUpdate({
                    setP1Ready(false);
                    setP2Ready(false);
                    setPhase('setup');
-                   emitStateUpdate({ p1Target: '', p2Target: '', phase: 'setup', p1Ready: false, p2Ready: false });
+                   emitStateUpdate({ p1Target: '', p2Target: '', pairTargets: { a: '', b: '' }, phase: 'setup', p1Ready: false, p2Ready: false });
                 } else {
                    setPhase('settings');
                    setP1Target('');
                    setP2Target('');
-                   setHasReachedConfirm(false);
                 }
               }}
               className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-xl transition-colors"
