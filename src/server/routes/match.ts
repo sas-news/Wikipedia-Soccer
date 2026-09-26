@@ -52,7 +52,7 @@ const FAME_MAP: Record<string, FameGate> = {
 
 function resolveBand(difficulty?: string): PairBand[] {
   if (!difficulty) return ['ideal'];
-  if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'weak') {
+  if (difficulty === 'ideal' || difficulty === 'hard') {
     return [difficulty];
   }
   // hard要求時のみidealへフォールバック。ideal要求時にhardへ落とすと
@@ -63,7 +63,7 @@ function resolveBand(difficulty?: string): PairBand[] {
 
 function resolveFame(difficulty?: string): FameGate | undefined {
   if (!difficulty) return undefined;
-  if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'weak') return undefined;
+  if (difficulty === 'ideal' || difficulty === 'hard') return undefined;
   const g = FAME_MAP[difficulty];
   return g && g.pv > 0 ? g : undefined;
 }

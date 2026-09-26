@@ -1,15 +1,16 @@
 name: Pool DB refresh
 
 # Wikipedia からの記事プール収集＋連想ペア前計算を定期実行し、
-# 成果物 data/difficulty.db.gz を main にコミットする。
-# Render は main への push を自動デプロイするため、これがデータ更新→公開の経路になる。
+# 成果物 data/difficulty.db.gz を GitHub Release "data-latest" のアセットとして公開する。
+# 最後に data/VERSION をコミットしてpush → Render自動デプロイが走り、
+# ビルド時にリリースアセットをDLして展開する（データ更新→公開まで自動）。
 on:
   schedule:
     - cron: '5 3 1 * *' # 毎月1日 12:05 JST
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write # release assetのuploadに必要
 
 jobs:
   refresh:
@@ -25,12 +26,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 前回コミット分のDBを展開して差分収集に備える
+      # 前回公開分のDBをリリースアセットから展開して差分収集に備える
       - name: Restore existing DB
         run: |
-          if [ -f data/difficulty.db.gz ]; then
-            gzip -dkf data/difficulty.db.gz || echo "::warning::existing archive corrupt, rebuilding from scratch"
-          fi
+          mkdir -p data
+          curl -fsSL -o data/difficulty.db.gz \
+            "https://github.com/${{ github.repository }}/releases/download/data-latest/difficulty.db.gz" \
+            && gzip -dkf data/difficulty.db.gz \
+            || echo "::warning::no existing release asset — building from scratch"
 
       - name: Collect article pool from Wikipedia
         run: npx tsx src/server/pool-collect.ts --fresh --concurrency 8
@@ -41,23 +44,31 @@ jobs:
         run: npx tsx src/server/assoc.ts
 
       # 空や著しく縮小したアーカイブを公開しないよう、下限を設けて落とす
-      # （現行は pool_articles ~3,179 / assoc_pairs ~488,476。半減以下を異常とみなす）
+      # （weak削減後の現行値: pool_articles ~3,179 / assoc_pairs ~198,292）
       - name: Verify pool populated
         run: npx tsx -e "import('./src/server/db').then(m => { m.initDatabase(); const db = m.getDb(); const n = db.prepare('SELECT COUNT(*) c FROM pool_articles').get().c; const p = db.prepare('SELECT COUNT(*) c FROM assoc_pairs').get().c; console.log('pool_articles:', n, 'assoc_pairs:', p); if (n < 1500 || p < 50000) { console.error('pool too small — 収集が途中で失敗した可能性'); process.exit(1) } })"
 
       - name: Compress DB
         run: gzip -kf data/difficulty.db
 
-      - name: Commit updated DB
+      # DB本体はgitにコミットしない。リリースアセットを上書きする
+      - name: Publish DB as release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view data-latest >/dev/null 2>&1 || \
+            gh release create data-latest --title "Latest pool DB" \
+              --notes "ゴールプール+連想ペアの前計算済みDB。pool-refresh workflowが月次で上書き。Renderビルドとローカル開発はここからDLする。"
+          gh release upload data-latest data/difficulty.db.gz --clobber
+
+      # データ更新をRenderに反映させるため、VERSIONバンプだけをpushする
+      # （リポジトリにバイナリを持たないので差分は数行のみ）
+      - name: Bump data version to trigger deploy
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/difficulty.db.gz
-          if git diff --cached --quiet; then
-            echo "no changes"
-          else
-            git commit -m "chore(data): refresh goal pool DB ($(date +%Y-%m-%d))"
-            # 収集中に main が進んでいる場合に備えて rebase してから push
-            git pull --rebase
-            git push
-          fi
+          date -u +%Y-%m-%dT%H:%M:%SZ > data/VERSION
+          git add data/VERSION
+          git commit -m "chore(data): publish refreshed pool DB ($(date +%Y-%m-%d))"
+          git pull --rebase
+          git push

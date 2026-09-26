@@ -18,7 +18,8 @@ import {
 import type { PairBand } from '../pool';
 
 const router = Router();
-const BANDS: PairBand[] = ['ideal', 'hard', 'near', 'weak'];
+// weakペアは収集時に保存しないため帯フィルタからも除外（残っているのは旧DBのみ）
+const BANDS: PairBand[] = ['ideal', 'hard', 'near'];
 
 /** クエリを安全な整数に変換（非数・NaN・負数は undefined に倒す） */
 function toInt(v: unknown): number | undefined {
@@ -34,9 +35,13 @@ router.get('/pool/stats', (_req, res) => {
 
 router.get('/pool/articles', (req, res) => {
   const band = req.query.band as string | undefined;
+  // 不明な帯を無言で無視すると非帯の全件が返り誤解を招くため、pairs同様に400にする
+  if (band !== undefined && !BANDS.includes(band as PairBand)) {
+    return res.status(400).json({ error: 'unknown band', valid: BANDS });
+  }
   res.json(
     getPoolArticleList({
-      band: BANDS.includes(band as PairBand) ? (band as PairBand) : undefined,
+      band: band as PairBand | undefined,
       q: req.query.q as string | undefined,
       eligibleOnly: req.query.eligible === '1',
       limit: toInt(req.query.limit),

@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "db:fetch": "bash scripts/fetch-db.sh",
     "start": "NODE_ENV=production tsx server.ts"
   },
   "dependencies": {

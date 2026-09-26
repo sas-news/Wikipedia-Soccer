@@ -13,17 +13,15 @@
 
 - **ランタイム**: Node 20 / `npm run build`（Vite）→ `npm run start`（tsx で Express+Socket.io）
 - **WebSocket**: Render は標準で WebSocket 対応。追加設定は不要
-- **DB**: `data/difficulty.db.gz`（ゴールプール+連想ペアの前計算済み SQLite）をリポジトリに同梱し、ビルド時に展開。無料枠のファイルシステムはエフェメラルなので、実行時に DB へ書き込んでも次回デプロイで消えますが、本アプリの DB は事前計算データなので問題ありません
+- **DB**: ゴールプール+連想ペアの前計算済み SQLite はリポジトリに同梱せず、GitHub Release `data-latest` のアセット（`difficulty.db.gz`）をビルド時に curl で取得して展開します。取得/展開に失敗してもビルドは落ちず、ペア出題だけがフォールバック動作になります。無料枠のファイルシステムはエフェメラルなので、実行時に DB へ書き込んでも次回デプロイで消えますが、本アプリの DB は事前計算データなので問題ありません
 - **ヘルスチェック**: `/healthz`
 
 ## データ更新（GitHub Actions）
 
 `.github/workflows/pool-refresh.yml` が毎月1日（または Actions タブから手動実行）に
-プール収集 `pool-collect` → ペア前計算 `assoc` → `data/difficulty.db.gz` を main にコミットします。
-main への push = Render の自動デプロイが走るので、データ更新→公開まで自動です。
-
-初回公開前に Actions タブで `Pool DB refresh` を **Run workflow** してください
-（リポジトリに DB がまだ無い場合、ペア出題はフォールバック動作になります）。
+プール収集 `pool-collect` → ペア前計算 `assoc` → `difficulty.db.gz` を Release `data-latest` のアセットに上書きアップロードし、
+最後に `data/VERSION` をバンプして main に push します。main への push = Render の自動デプロイが走り、
+ビルド時に最新アセットをDLするので、データ更新→公開まで自動です。
 収集規模を変えたい場合は Repository Variables に `POOL_LIMIT` を設定してください（未設定=全件）。
 
 ## 無料枠の注意点

@@ -13,8 +13,10 @@
 
 ```bash
 npm install
-gzip -dkf data/difficulty.db.gz  # プールDB展開（同梱アーカイブから）
+npm run db:fetch  # プールDBをGitHub Release "data-latest" から取得して展開
 ```
+
+DBはリポジトリに同梱していません（容量対策）。`data-latest` リリースには常に最新の `difficulty.db.gz` があります。
 
 ## 開発サーバーの起動
 
@@ -39,10 +41,10 @@ npm run dev
 
 ### 帯の定義
 
-- **near**: direct link または duel≥4 → 近すぎ（先番勝ち）
+- **near**: direct link または duel≥4 → 近すぎ（先番勝ち）。出題しないが統計用に保存はする
 - **ideal**: duel≤3 かつ同/隣接ドメイン かつ bendが両方向≥1または合計≥3
 - **hard**: duel≤1, bend≤1, paths3≥10, 同/隣接ドメイン → 遠いが届く
-- **weak/far**: 出題しない
+- **weak/far**: 出題しない。weakはDB容量を圧迫するため収集時に保存しない
 
 ## API エンドポイント
 
@@ -58,11 +60,11 @@ npm run dev
 
 ```bash
 npx tsx src/server/pool-collect.ts --fresh   # プール収集（~10分、POOL_LIMITで規模変更可）
-npx tsx src/server/assoc.ts                   # ペア前計算
-gzip -kf data/difficulty.db                   # 同梱用アーカイブ更新
+npx tsx src/server/assoc.ts                   # ペア前計算（weak帯は保存しない）
+gzip -kf data/difficulty.db                   # リリースアセット用アーカイブ
 ```
 
-GitHub Actions の `pool-refresh` ワークフローが月次で自動実行し、成果物をmainにコミットします（Render自動デプロイで公開に反映）。
+GitHub Actions の `pool-refresh` ワークフローが月次で自動実行し、成果物を GitHub Release `data-latest` のアセットとして公開します（最後に `data/VERSION` をバンプpushして Render 自動デプロイを起動）。
 
 ## 技術スタック
 
