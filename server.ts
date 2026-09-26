@@ -2,7 +2,7 @@ import express from 'express';
 import compression from 'compression';
 import path from 'path';
 import fs from 'fs';
-import { gunzipSync } from 'zlib';
+import { gunzipSync, inflateRawSync } from 'zlib';
 import Database from 'better-sqlite3';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
@@ -11,6 +11,7 @@ import { initPoolSchema } from './src/server/pool';
 import { fetchRandomArticles } from './src/server/wiki-api';
 import matchRoutes from './src/server/routes/match';
 import poolRoutes from './src/server/routes/pool';
+import { base64UrlDecode, parseSharedResult, type SharedResult } from './src/shared/result';
 
 /** プロキシのページキャッシュ（記事は頻繁に書き換わらない前提の短命キャッシュ） */
 const WIKI_CACHE_TTL = 5 * 60 * 1000;
@@ -429,6 +430,24 @@ async function startServer() {
     });
   });
 
+  // ?r= 結果共有パラメータのサーバー側デコード（OGP注入用。ブラウザ側は DecompressionStream）
+  const decodeShareResultParam = (param: string): SharedResult | null => {
+    const dot = param.indexOf('.');
+    if (dot < 0) return null;
+    const ver = param.slice(0, dot);
+    const bytes = base64UrlDecode(param.slice(dot + 1));
+    if (!bytes) return null;
+    try {
+      const buf =
+        ver === 'd1' ? inflateRawSync(Buffer.from(bytes)) :
+        ver === 'j1' ? Buffer.from(bytes) : null;
+      if (!buf) return null;
+      return parseSharedResult(buf.toString('utf8'));
+    } catch {
+      return null;
+    }
+  };
+
   // Wikipedia Proxy Route
   app.get('/proxy/wiki/*', async (req, res) => {
     try {
@@ -726,9 +745,27 @@ async function startServer() {
   } else {
     // Production static serving
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath, { maxAge: '1h' }));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    // index:false にして '/' も下の catch-all に流し、?r= 結果リンクでOGPを動的注入する
+    app.use(express.static(distPath, { maxAge: '1h', index: false }));
+    let cachedIndexHtml: string | null = null;
+    app.get('*', (req, res) => {
+      const r = typeof req.query.r === 'string' ? req.query.r : null;
+      const result = r ? decodeShareResultParam(r) : null;
+      if (!result) {
+        res.sendFile(path.join(distPath, 'index.html'));
+        return;
+      }
+      cachedIndexHtml ??= fs.readFileSync(path.join(distPath, 'index.html'), 'utf8');
+      const esc = (t: string) =>
+        t.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const goal = result.g[result.w - 1];
+      const moves = result.h.length - 1;
+      const desc = `「${result.s}」から${moves}手で「${goal}」に到達 — Player ${result.w} の勝利`;
+      const html = cachedIndexHtml
+        .replace(/<meta name="description"[^>]*>/, `<meta name="description" content="${esc(desc)}">`)
+        .replace(/<meta property="og:title"[^>]*>/, `<meta property="og:title" content="${esc(`Wikipedia Soccer — Player ${result.w} の勝利！`)}">`)
+        .replace(/<meta property="og:description"[^>]*>/, `<meta property="og:description" content="${esc(desc)}">`);
+      res.type('html').send(html);
     });
   }
 
