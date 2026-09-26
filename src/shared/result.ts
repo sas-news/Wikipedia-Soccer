@@ -34,24 +34,30 @@ export function base64UrlDecode(s: string): Uint8Array | null {
   }
 }
 
+/** オブジェクトがSharedResultの形か検証（サーバー埋め込み/URLデコード共通） */
+export function isSharedResult(o: unknown): o is SharedResult {
+  if (typeof o !== 'object' || o === null || (o as { v?: unknown }).v !== 1) return false;
+  const r = o as { s?: unknown; w?: unknown; g?: unknown; h?: unknown };
+  if (typeof r.s !== 'string' || !r.s || r.s.length > MAX_TITLE_LEN) return false;
+  if (r.w !== 1 && r.w !== 2) return false;
+  if (!Array.isArray(r.g) || r.g.length !== 2 ||
+      r.g.some((t: unknown) => typeof t !== 'string' || !t || (t as string).length > MAX_TITLE_LEN)) {
+    return false;
+  }
+  if (!Array.isArray(r.h) || r.h.length === 0 || r.h.length > MAX_HISTORY) return false;
+  for (const e of r.h) {
+    if (!Array.isArray(e) || e.length !== 2) return false;
+    if (typeof e[0] !== 'string' || !e[0] || e[0].length > MAX_TITLE_LEN) return false;
+    if (e[1] !== 1 && e[1] !== 2) return false;
+  }
+  return true;
+}
+
 /** JSON文字列→SharedResult。壊れた/過大な入力を弾く（サーバー・クライアント共通の検証） */
 export function parseSharedResult(json: string): SharedResult | null {
   try {
-    const o = JSON.parse(json);
-    if (typeof o !== 'object' || o === null || o.v !== 1) return null;
-    if (typeof o.s !== 'string' || !o.s || o.s.length > MAX_TITLE_LEN) return null;
-    if (o.w !== 1 && o.w !== 2) return null;
-    if (!Array.isArray(o.g) || o.g.length !== 2 ||
-        o.g.some((t: unknown) => typeof t !== 'string' || !t || (t as string).length > MAX_TITLE_LEN)) {
-      return null;
-    }
-    if (!Array.isArray(o.h) || o.h.length === 0 || o.h.length > MAX_HISTORY) return null;
-    for (const e of o.h) {
-      if (!Array.isArray(e) || e.length !== 2) return null;
-      if (typeof e[0] !== 'string' || !e[0] || e[0].length > MAX_TITLE_LEN) return null;
-      if (e[1] !== 1 && e[1] !== 2) return null;
-    }
-    return o as SharedResult;
+    const o: unknown = JSON.parse(json);
+    return isSharedResult(o) ? o : null;
   } catch {
     return null;
   }
@@ -72,16 +78,25 @@ export async function encodeResult(r: SharedResult): Promise<string> {
   return `j1.${base64UrlEncode(json)}`;
 }
 
-/** 長い ?r= URLをサーバー経由で短縮。失敗・拒否時は元URLをそのまま返す */
-export async function shortenShareUrl(longUrl: string): Promise<string> {
+/** 結果コードをサーバー経由で外部ホストに預け、自ドメインの短い /r/<id> URLを得る。
+ *  失敗時はロング ?r= URLにフォールバック（機能は維持） */
+export async function shareCodeToUrl(code: string): Promise<string> {
   try {
-    const res = await fetch(`/api/shorten?url=${encodeURIComponent(longUrl)}`);
-    if (!res.ok) return longUrl;
-    const data = await res.json();
-    return typeof data.url === 'string' && data.url ? data.url : longUrl;
+    const res = await fetch('/api/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (res.ok) {
+      const data = await res.json() as { id?: string | null };
+      if (typeof data.id === 'string' && data.id) {
+        return `${window.location.origin}/r/${data.id}`;
+      }
+    }
   } catch {
-    return longUrl;
+    // fallthrough
   }
+  return `${window.location.origin}${window.location.pathname}?r=${code}`;
 }
 
 /** URLパラメータ文字列 → SharedResult（解釈不能なら null） */

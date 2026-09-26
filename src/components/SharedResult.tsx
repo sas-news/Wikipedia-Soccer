@@ -1,24 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Trophy, Share2, Play, Home, ExternalLink } from 'lucide-react';
-import { shortenShareUrl, type SharedResult } from '../shared/result';
+import { encodeResult, shareCodeToUrl, type SharedResult } from '../shared/result';
 
 interface Props {
   result: SharedResult;
-  shareUrl: string;
   onPlaySame: () => void;
   onExit: () => void;
   onToast: (msg: string) => void;
 }
 
-// ?r= で共有された対戦結果の閲覧画面（結果の再生・同一お題での再対戦につなぐ）
-export default function SharedResult({ result, shareUrl, onPlaySame, onExit, onToast }: Props) {
-  // shareUrl はロング ?r= URL。表示・再シェアは短縮版を使う
-  const [shortUrl, setShortUrl] = useState(shareUrl);
+// 共有された対戦結果の閲覧画面（結果の再生・同一お題での再対戦につなぐ）
+export default function SharedResult({ result, onPlaySame, onExit, onToast }: Props) {
+  // /r/<id> で開いているなら現在のURL自体が共有リンク。?r= の場合は /r/<id> を発行し直す
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
-    shortenShareUrl(shareUrl).then(u => { if (alive) setShortUrl(u); });
+    if (/^\/r\//.test(window.location.pathname)) {
+      setShareUrl(window.location.href);
+      return;
+    }
+    encodeResult(result).then(shareCodeToUrl).then(u => { if (alive) setShareUrl(u); });
     return () => { alive = false; };
-  }, [shareUrl]);
+  }, [result]);
   const winnerGoal = result.g[result.w - 1];
   const loserGoal = result.g[result.w === 1 ? 1 : 0];
   const moves = result.h.length - 1;
@@ -26,6 +29,7 @@ export default function SharedResult({ result, shareUrl, onPlaySame, onExit, onT
   const p1Moves = useMemo(() => result.h.filter(e => e[1] === 1).length - 1, [result]);
   const p2Moves = result.h.length - p1Moves - 1;
   const shareText = `Wikipedia Soccer | 「${result.s}」から ${moves}手で「${winnerGoal}」に到達！`;
+  const url = shareUrl ?? window.location.href;
 
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -88,17 +92,17 @@ export default function SharedResult({ result, shareUrl, onPlaySame, onExit, onT
               onClick={async () => {
                 if (navigator.share) {
                   try {
-                    await navigator.share({ title: 'Wikipedia Soccer', text: shareText, url: shortUrl });
+                    await navigator.share({ title: 'Wikipedia Soccer', text: shareText, url });
                     return;
                   } catch {
                     // キャンセル時はクリップボードへ
                   }
                 }
                 try {
-                  await navigator.clipboard.writeText(`${shareText} ${shortUrl}`);
+                  await navigator.clipboard.writeText(`${shareText} ${url}`);
                   onToast('結果リンクをコピーしました');
                 } catch {
-                  window.prompt('以下をコピーしてください', `${shareText} ${shortUrl}`);
+                  window.prompt('以下をコピーしてください', `${shareText} ${url}`);
                 }
               }}
               className="flex-1 py-2 px-4 border-2 border-sky-500 text-sky-600 font-bold rounded-xl hover:bg-sky-50 transition-colors flex items-center justify-center gap-1.5 text-sm"
@@ -106,7 +110,7 @@ export default function SharedResult({ result, shareUrl, onPlaySame, onExit, onT
               <Share2 className="w-4 h-4" /> 結果をシェア
             </button>
             <a
-              href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shortUrl)}`}
+              href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(url)}`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex-1 py-2 px-4 border-2 border-gray-900 text-gray-900 font-bold rounded-xl hover:bg-gray-100 transition-colors flex items-center justify-center gap-1.5 text-sm"

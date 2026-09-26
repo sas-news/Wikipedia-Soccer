@@ -5,7 +5,7 @@ import ArticleInspector from './components/ArticleInspector';
 import RulesModal, { CreatorLinks } from './components/RulesModal';
 import BackButton from './components/BackButton';
 import SharedResultView from './components/SharedResult';
-import { encodeResult, decodeResult, shortenShareUrl, type SharedResult } from './shared/result';
+import { encodeResult, decodeResult, shareCodeToUrl, isSharedResult, type SharedResult } from './shared/result';
 
 type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting' | 'inspector' | 'result';
 
@@ -434,6 +434,35 @@ export default function App() {
   // StrictModeのマウント2回実行で二重join→自分のソケットをevictしないようrefで一度だけ
   const autoJoinAttempted = useRef(false);
   useEffect(() => {
+    // /r/<id> リンクの本番ページはサーバーが結果をHTML埋め込みで返す
+    const embedded = (window as unknown as { __SHARED_RESULT__?: unknown }).__SHARED_RESULT__;
+    if (embedded) {
+      if (isSharedResult(embedded)) {
+        setSharedResult(embedded);
+        setPhase('result');
+      }
+      return;
+    }
+    // 開発モード等でHTML埋め込みがない /r/ パスはAPIから結果を引く
+    const rid = window.location.pathname.match(/^\/r\/([A-Za-z0-9_.-]+)$/);
+    if (rid) {
+      fetch(`/api/result/${rid[1]}`)
+        .then(res => (res.ok ? res.json() : null))
+        .then(res => {
+          if (res && isSharedResult(res)) {
+            setSharedResult(res);
+            setPhase('result');
+          } else {
+            showToast('結果リンクが見つかりませんでした');
+            window.history.replaceState(null, '', '/');
+          }
+        })
+        .catch(() => {
+          showToast('結果リンクが見つかりませんでした');
+          window.history.replaceState(null, '', '/');
+        });
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     // 結果共有リンク ?r= があればリザルト画面を最優先で表示
     const r = params.get('r');
@@ -473,9 +502,8 @@ export default function App() {
     };
     let alive = true;
     encodeResult(result).then(async code => {
-      const longUrl = `${window.location.origin}${window.location.pathname}?r=${code}`;
-      // SNS/チャットで貼れるよう is.gd 短縮（失敗時はロングURLのまま）
-      const url = await shortenShareUrl(longUrl);
+      // /r/<id> の自ドメイン短縮リンク（外部ホスト失敗時はロング ?r= URL）
+      const url = await shareCodeToUrl(code);
       if (alive) setShareUrl(url);
     });
     return () => { alive = false; };
@@ -994,11 +1022,9 @@ export default function App() {
     return (
       <SharedResultView
         result={r}
-        // リザルト画面側で短縮するためロングURLを渡す
-        shareUrl={`${window.location.origin}${window.location.pathname}?r=${new URLSearchParams(window.location.search).get('r')}`}
         onPlaySame={() => {
-          // 同じスタート・目標でローカル対戦を開始
-          window.history.replaceState(null, '', window.location.pathname);
+          // 同じスタート・目標でローカル対戦を開始（/r/ や ?r= パスを消す）
+          window.history.replaceState(null, '', '/');
           setSharedResult(null);
           setStartPageMode('custom');
           setCustomStartPage(r.s);
@@ -1017,7 +1043,7 @@ export default function App() {
           setPhase('confirm');
         }}
         onExit={() => {
-          window.history.replaceState(null, '', window.location.pathname);
+          window.history.replaceState(null, '', '/');
           setSharedResult(null);
           setPhase('settings');
         }}

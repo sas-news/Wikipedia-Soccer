@@ -728,63 +728,96 @@ async function startServer() {
   app.use('/api', matchRoutes);
   app.use('/api', poolRoutes);
 
-  // ?r= 結果リンクの短縮URL発行。長すぎる ?r= URLをそのままSNSに貼れないため外部短縮サービス経由で短縮する。
-  // 自オリジンの結果リンクのみ許可（外部URLの短縮代行化を防止）
-  const shortenLimiter = makeRateLimiter(30);
-  const shortenCache = new Map<string, string>();
-  // is.gd/v.gd は sasnews.dev をブロックしているため使えない。spoo.me→ulvis.net の順で試す
-  const shortenProviders: ((longUrl: string) => Promise<string | null>)[] = [
-    async (longUrl) => {
-      const r = await fetch('https://spoo.me/', {
-        method: 'POST',
-        headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `url=${encodeURIComponent(longUrl)}`,
-        signal: AbortSignal.timeout(8000),
-      });
-      const data = await r.json().catch(() => null) as { short_url?: string } | null;
-      const u = data?.short_url;
-      return u ? u.replace(/^http:\/\//, 'https://') : null;
+  // 結果共有: エンコード済み結果コードを外部テキストホストに預け、自ドメインの短いID
+  // (/r/<prov>.<id>) を発行する。自オリジン短縮を維持しつつURLを短くするための方式。
+  // (サーバー保存はRenderのephemeral diskで消えるため外部ホスト利用)
+  const shareLimiter = makeRateLimiter(30);
+  const shareCache = new Map<string, string>(); // code -> 'rs.xxx' 等の key
+  const fetchText = async (url: string): Promise<string | null> => {
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
+    return (await r.text()).trim();
+  };
+  const shareProviders: { key: string; upload: (code: string) => Promise<string | null>; read: (id: string) => Promise<string | null> }[] = [
+    {
+      key: 'rs',
+      upload: async (code) => {
+        const r = await fetch('https://paste.rs', { method: 'POST', body: code, signal: AbortSignal.timeout(8000) });
+        const u = (await r.text()).trim();
+        const m = u.match(/^https:\/\/paste\.rs\/([A-Za-z0-9_-]+)$/);
+        return m ? m[1] : null;
+      },
+      read: (id) => fetchText(`https://paste.rs/${id}`),
     },
-    async (longUrl) => {
-      const r = await fetch(`https://ulvis.net/api.php?url=${encodeURIComponent(longUrl)}`, {
-        signal: AbortSignal.timeout(8000),
-      });
-      const text = (await r.text()).trim();
-      return text.startsWith('https://ulvis.net/') ? text : null;
+    {
+      key: 'bb',
+      upload: async (code) => {
+        const r = await fetch('https://bytebin.lucko.me/post', { method: 'POST', body: code, signal: AbortSignal.timeout(8000) });
+        const data = await r.json().catch(() => null) as { key?: string } | null;
+        return data?.key && /^[A-Za-z0-9_-]+$/.test(data.key) ? data.key : null;
+      },
+      read: (id) => fetchText(`https://bytebin.lucko.me/${id}`),
+    },
+    {
+      key: 'cn',
+      upload: async (code) => {
+        const r = await fetch('https://paste.c-net.org', { method: 'POST', body: code, signal: AbortSignal.timeout(8000) });
+        const u = (await r.text()).trim();
+        const m = u.match(/^https:\/\/paste\.c-net\.org\/([A-Za-z0-9_-]+)$/);
+        return m ? m[1] : null;
+      },
+      read: (id) => fetchText(`https://paste.c-net.org/${id}`),
     },
   ];
-  app.get('/api/shorten', async (req, res) => {
-    const raw = typeof req.query.url === 'string' ? req.query.url : '';
-    let longUrl: URL;
-    try {
-      longUrl = new URL(raw);
-    } catch {
-      return res.status(400).json({ error: 'bad url' });
+
+  // POST /api/share { code } -> { id: '<prov>.<id>' }
+  app.post('/api/share', async (req, res) => {
+    const code = typeof req.body?.code === 'string' ? req.body.code : '';
+    if (!code || code.length > 20000 || !decodeShareResultParam(code)) {
+      return res.status(400).json({ error: 'bad code' });
     }
-    if (longUrl.host !== req.headers.host || longUrl.pathname !== '/' || !longUrl.searchParams.get('r')) {
-      return res.status(403).json({ error: 'only own ?r= links' });
+    const cached = shareCache.get(code);
+    if (cached) return res.json({ id: cached });
+    if (!shareLimiter(req.ip || 'unknown')) {
+      return res.json({ id: null });
     }
-    const cached = shortenCache.get(longUrl.href);
-    if (cached) return res.json({ url: cached });
-    if (!shortenLimiter(req.ip || 'unknown')) {
-      return res.json({ url: longUrl.href });
-    }
-    for (const provider of shortenProviders) {
+    for (const p of shareProviders) {
       try {
-        const short = await provider(longUrl.href);
-        if (!short) continue;
-        if (shortenCache.size >= 500) {
-          const oldest = shortenCache.keys().next().value;
-          if (oldest !== undefined) shortenCache.delete(oldest);
+        const id = await p.upload(code);
+        if (!id) continue;
+        const key = `${p.key}.${id}`;
+        if (shareCache.size >= 500) {
+          const oldest = shareCache.keys().next().value;
+          if (oldest !== undefined) shareCache.delete(oldest);
         }
-        shortenCache.set(longUrl.href, short);
-        return res.json({ url: short });
+        shareCache.set(code, key);
+        return res.json({ id: key });
       } catch {
         // 次のプロバイダへ
       }
     }
-    // 全プロバイダ失敗時はロングURLをそのまま返す
-    res.json({ url: longUrl.href });
+    res.json({ id: null });
+  });
+
+  // GET /api/result/:key -> SharedResult JSON（/r/:key HTMLの裏側。開発時や直接API参照用）
+  const resolveShareKey = async (key: string): Promise<SharedResult | null> => {
+    const dot = key.indexOf('.');
+    if (dot < 0) return null;
+    const prov = shareProviders.find(p => p.key === key.slice(0, dot));
+    const id = key.slice(dot + 1);
+    if (!prov || !/^[A-Za-z0-9_-]+$/.test(id)) return null;
+    try {
+      const code = await prov.read(id);
+      if (!code) return null;
+      return decodeShareResultParam(code);
+    } catch {
+      return null;
+    }
+  };
+  app.get('/api/result/:key', async (req, res) => {
+    const result = await resolveShareKey(req.params.key);
+    if (!result) return res.status(404).json({ error: 'not found' });
+    res.json(result);
   });
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
@@ -805,9 +838,33 @@ async function startServer() {
   } else {
     // Production static serving
     const distPath = path.join(process.cwd(), 'dist');
-    // index:false にして '/' も下の catch-all に流し、?r= 結果リンクでOGPを動的注入する
+    // index:false にして '/' も下の catch-all に流し、結果リンクでOGPを動的注入する
     app.use(express.static(distPath, { maxAge: '1h', index: false }));
     let cachedIndexHtml: string | null = null;
+    // 結果を埋め込んだ index.html を組み立てる（OGP差し替え＋window.__SHARED_RESULT__）
+    const renderResultHtml = (result: SharedResult): string => {
+      cachedIndexHtml ??= fs.readFileSync(path.join(distPath, 'index.html'), 'utf8');
+      const esc = (t: string) =>
+        t.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const goal = result.g[result.w - 1];
+      const moves = result.h.length - 1;
+      const desc = `「${result.s}」から${moves}手で「${goal}」に到達 — Player ${result.w} の勝利`;
+      const json = JSON.stringify(result).replace(/</g, '\\u003c');
+      return cachedIndexHtml
+        .replace(/<meta name="description"[^>]*>/, `<meta name="description" content="${esc(desc)}">`)
+        .replace(/<meta property="og:title"[^>]*>/, `<meta property="og:title" content="${esc(`Wikipedia Soccer — Player ${result.w} の勝利！`)}">`)
+        .replace(/<meta property="og:description"[^>]*>/, `<meta property="og:description" content="${esc(desc)}">`)
+        .replace('</head>', `<script>window.__SHARED_RESULT__=${json}</script></head>`);
+    };
+    // 短い結果リンク /r/<prov>.<id>
+    app.get('/r/:key', async (req, res) => {
+      const result = await resolveShareKey(req.params.key).catch(() => null);
+      if (!result) {
+        res.sendFile(path.join(distPath, 'index.html'));
+        return;
+      }
+      res.type('html').send(renderResultHtml(result));
+    });
     app.get('*', (req, res) => {
       const r = typeof req.query.r === 'string' ? req.query.r : null;
       const result = r ? decodeShareResultParam(r) : null;
@@ -815,17 +872,7 @@ async function startServer() {
         res.sendFile(path.join(distPath, 'index.html'));
         return;
       }
-      cachedIndexHtml ??= fs.readFileSync(path.join(distPath, 'index.html'), 'utf8');
-      const esc = (t: string) =>
-        t.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const goal = result.g[result.w - 1];
-      const moves = result.h.length - 1;
-      const desc = `「${result.s}」から${moves}手で「${goal}」に到達 — Player ${result.w} の勝利`;
-      const html = cachedIndexHtml
-        .replace(/<meta name="description"[^>]*>/, `<meta name="description" content="${esc(desc)}">`)
-        .replace(/<meta property="og:title"[^>]*>/, `<meta property="og:title" content="${esc(`Wikipedia Soccer — Player ${result.w} の勝利！`)}">`)
-        .replace(/<meta property="og:description"[^>]*>/, `<meta property="og:description" content="${esc(desc)}">`);
-      res.type('html').send(html);
+      res.type('html').send(renderResultHtml(result));
     });
   }
 
