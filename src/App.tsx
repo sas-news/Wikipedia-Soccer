@@ -276,6 +276,25 @@ export default function App() {
     setPeerLeft(false);
     setIsSuspended(false);
     setUndoRequest(null);
+    // ルームで同期された設定・対戦状態を初期値へ戻す
+    setP1Target('');
+    setP2Target('');
+    setPairStart(null);
+    setCustomStartPage('');
+    setStartPageMode('random');
+    setMovesPhase1(1);
+    setMovesPhaseN(2);
+    setTurnTimeLimit(0);
+    setMoveTimeLimit(0);
+    setPairDifficulty('medium');
+    setP1Ready(false);
+    setP2Ready(false);
+    setWinner(null);
+    setCurrentPage('');
+    setGlobalHistory([]);
+    setTurnHistory([]);
+    setMovesMade(0);
+    setTurnCount(1);
     setPhase('settings');
   };
 
@@ -516,6 +535,19 @@ export default function App() {
     }
   };
 
+  // 有効な移動先リンク(ns=0)が1件も無いページは対戦が詰むため弾く
+  const pageHasLinks = async (title: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`https://ja.wikipedia.org/w/api.php?action=query&prop=links&plnamespace=0&pllimit=1&format=json&origin=*&titles=${encodeURIComponent(title)}`);
+      const data = await res.json();
+      const page = Object.values(data?.query?.pages ?? {})[0] as { missing?: boolean; links?: unknown[] } | undefined;
+      if (!page || page.missing) return false;
+      return Array.isArray(page.links) && page.links.length > 0;
+    } catch {
+      return true; // 検証自体の失敗では開始を妨げない
+    }
+  };
+
   const startGame = async () => {
     if (!p1Target || !p2Target) {
       showToast('目標ページを設定してください');
@@ -531,14 +563,18 @@ export default function App() {
     try {
       let startPage = '';
       if (startPageMode === 'custom' && customStartPage) {
+        if (!(await pageHasLinks(customStartPage))) {
+          showToast('スタートページが存在しないか有効なリンクがありません');
+          return;
+        }
         startPage = customStartPage;
       } else if (pairStart && pairStart.a === p1Target && pairStart.b === p2Target) {
         startPage = pairStart.start;
       } else {
         startPage = await fetchTrueRandom();
       }
-      // スタートがゴールと一致すると開始直後に詰むため引き直す
-      if (startPage === p1Target || startPage === p2Target) {
+      // スタートがゴールと一致、または移動先が無いページなら引き直す
+      if (startPage === p1Target || startPage === p2Target || !(await pageHasLinks(startPage))) {
         startPage = await fetchTrueRandom();
       }
       
@@ -1817,6 +1853,14 @@ emitStateUpdate({
             >
               {isOnline ? (isSpectator ? '観戦を終了する' : 'もう一度遊ぶ（再戦）') : '最初から遊ぶ'}
             </button>
+            {isOnline && !isSpectator && (
+              <button
+                onClick={exitOnlineToSettings}
+                className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                ルームを退出してトップへ戻る
+              </button>
+            )}
           </div>
         </div>
       )}
