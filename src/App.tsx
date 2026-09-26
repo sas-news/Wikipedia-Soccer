@@ -40,6 +40,14 @@ interface SavedGame {
 }
 const SAVE_KEY = 'wiki_soccer_save';
 
+// ペア抽選の難易度プリセット表示名（帯リテラル・fallbackの'random'にはband名でフォールバック）
+const DIFFICULTY_LABELS: Record<string, string> = {
+  easy: 'やさしい',
+  medium: 'ちょうど良い',
+  hard: '難しい',
+  near: '近すぎ',
+};
+
 export default function App() {
   const [phase, setPhase] = useState<Phase>('settings');
   
@@ -1161,6 +1169,7 @@ export default function App() {
                     <option value="easy">やさしい</option>
                     <option value="medium">ちょうど良い</option>
                     <option value="hard">難しい（遠いが届く）</option>
+                    <option value="near">近すぎ（早い者勝ち）</option>
                   </select>
                   <button
                     onClick={fetchPairTargets}
@@ -1173,7 +1182,7 @@ export default function App() {
                 </div>
                 {pairStart && (
                   <p className="text-xs text-purple-600">
-                    {pairStart.difficulty === 'easy' ? 'やさしい' : pairStart.difficulty === 'hard' ? '難しい' : 'ちょうど良い'}帯で抽選
+                    {DIFFICULTY_LABELS[pairStart.difficulty] ?? pairStart.band}帯で抽選
                     {pairStart.difficulty === 'hard' && pairStart.band === 'ideal' ? '（hard候補なし→ちょうど良い帯に退避）' : ''} / 対称スタート候補: {pairStart.start}（ランダム開始時に使用）
                   </p>
                 )}
