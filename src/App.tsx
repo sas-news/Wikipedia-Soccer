@@ -195,13 +195,9 @@ export default function App() {
     // 明示退出のみここに来る（回線断はpeer_left）
     socket.on('player_disconnected', () => {
       showToast('相手が退出しました。タイトルに戻ります。');
-      window.history.replaceState(null, '', window.location.pathname);
-      setPhase('settings');
-      socket.disconnect();
-      setSocket(null);
-      setIsOnline(false);
-      setPeerLeft(false);
-      setMyPlayerNum(null);
+      // 残された側も同期済みの目標・ready・対戦状態を全リセットしないと、
+      // ローカル対戦開始時に放棄されたオンライン対戦のconfirm画面が復活する
+      exitOnlineToSettings();
     });
 
     socket.on('suspend', () => {
@@ -1860,7 +1856,8 @@ emitStateUpdate({
                         await navigator.clipboard.writeText(`${shareText} ${shareUrl}`);
                         showToast('結果をコピーしました');
                       } catch {
-                        showToast(`${shareText} ${shareUrl}`);
+                        // クリップボードも使えない環境では選択可能なダイアログで渡す
+                        window.prompt('以下をコピーしてください', `${shareText} ${shareUrl}`);
                       }
                     }}
                     className="flex-1 py-2 px-4 border-2 border-sky-500 text-sky-600 font-bold rounded-xl hover:bg-sky-50 transition-colors flex items-center justify-center gap-1.5 text-sm"
