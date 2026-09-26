@@ -1,6 +1,9 @@
 import express from 'express';
 import compression from 'compression';
 import path from 'path';
+import fs from 'fs';
+import { gunzipSync } from 'zlib';
+import Database from 'better-sqlite3';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import { initDatabase, closeDatabase } from './src/server/db';
@@ -67,7 +70,55 @@ function makeSocketThrottle(perSec: number) {
 const WIKI_PAGE_UA =
   'WikipediaSoccerGame/1.0 (https://github.com/sas-news/Wikipedia-Soccer; in-game proxy)';
 
+/** プールDBの配置先と取得元（render.yaml のビルド時DLと同じアセット） */
+const POOL_DB_URL =
+  process.env.POOL_DB_URL ??
+  'https://github.com/sas-news/Wikipedia-Soccer/releases/download/data-latest/difficulty.db.gz';
+const POOL_DB_PATH = path.join(process.cwd(), 'data', 'difficulty.db');
+const POOL_DB_MIN_BYTES = 1024 * 1024;
+const POOL_DB_FETCH_TIMEOUT_MS = 60_000;
+
+/** サイズだけでなく中身も確認: 不完全なDBが残っていても再取得する */
+function poolDbUsable(p: string): boolean {
+  try {
+    if (!fs.existsSync(p) || fs.statSync(p).size < POOL_DB_MIN_BYTES) return false;
+    const d = new Database(p, { readonly: true, fileMustExist: true });
+    try {
+      const pairs = (d.prepare('SELECT COUNT(*) c FROM assoc_pairs').get() as { c: number }).c;
+      const elig = (d.prepare('SELECT COUNT(*) c FROM pool_articles WHERE eligible=1').get() as { c: number }).c;
+      return pairs > 0 && elig > 0;
+    } finally {
+      d.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** DB未配置でも起動時に自力取得してフォールバック出題を防ぐ（ビルド時DL失敗・ローカル未fetchを自癒） */
+async function ensurePoolDb(): Promise<void> {
+  const tmpPath = `${POOL_DB_PATH}.dl-${process.pid}`;
+  try {
+    if (poolDbUsable(POOL_DB_PATH)) return;
+    console.log('[pool] DB未配置/不完全 — リリースアセットから取得します...');
+    const res = await fetch(POOL_DB_URL, { signal: AbortSignal.timeout(POOL_DB_FETCH_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const raw = gunzipSync(Buffer.from(await res.arrayBuffer()));
+    fs.mkdirSync(path.dirname(POOL_DB_PATH), { recursive: true });
+    // 一時ファイルに書いて検証後に原子置換（中断で本体を壊さない）
+    fs.writeFileSync(tmpPath, raw);
+    if (!poolDbUsable(tmpPath)) throw new Error('取得したDBが不完全です');
+    fs.renameSync(tmpPath, POOL_DB_PATH);
+    console.log(`[pool] DB配置完了 (${raw.length} bytes)`);
+  } catch (e) {
+    console.warn('[pool] DB取得失敗 — フォールバック出題で起動します:', e);
+  } finally {
+    fs.rmSync(tmpPath, { force: true });
+  }
+}
+
 async function startServer() {
+  await ensurePoolDb();
   initDatabase();
   initPoolSchema();
 
