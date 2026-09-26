@@ -1043,6 +1043,7 @@ export default function App() {
               </p>
             </div>
 
+            <div className="flex gap-2">
               <button
                 onClick={() => {
                   if (startPageMode === 'custom') {
@@ -1061,21 +1062,17 @@ export default function App() {
                     setPhase('setup');
                   }
                 }}
-              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg transition-colors"
-            >
-              {p1Ready && p2Ready ? '保存して戻る' : '目標設定に進む'}
-            </button>
-
-            {!isOnline && (
-              <div className="pt-4 border-t border-gray-200 space-y-3">
-                <button
-                  onClick={() => setPhase('online_setup')}
-                  className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  <Globe className="w-5 h-5"/> オンライン対戦
-                </button>
-              </div>
-            )}
+                className="flex-1 py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg transition-colors"
+              >
+                {p1Ready && p2Ready ? '保存して戻る' : 'ローカル対戦'}
+              </button>
+              <button
+                onClick={() => setPhase('online_setup')}
+                className="flex-1 py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <Globe className="w-5 h-5"/> オンライン対戦
+              </button>
+            </div>
 
             {hasSaveData && (
               <div className="pt-4 border-t border-gray-200">
@@ -1511,7 +1508,7 @@ export default function App() {
                  }}
                  className="flex-1 py-3 text-gray-600 hover:text-gray-800 text-xs font-bold transition-colors bg-gray-100 hover:bg-gray-200 rounded-xl"
               >
-                 {isOnline ? '退出してトップへ' : '全設定'}
+                 {isOnline ? '退出してトップへ' : '設定画面に戻る'}
               </button>
               <button
                  onClick={() => {
