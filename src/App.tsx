@@ -300,12 +300,12 @@ export default function App() {
 
   // 席の本人証明: 端末に保存するランダムトークンで回線断からの席復帰を可能にする
   const seatToken = () => {
-    // sessionStorageにすることでタブごとに固有の身分になる（2タブでの対戦が可能）。
-    // リロードでは値が残るので席の復帰は引き続き機能し、タブを閉じると権利は放棄される
-    let t = sessionStorage.getItem('wiki_soccer_seat_token');
+    // localStorageにすることでタブを閉じても端末に身分が残り、URL再訪で席に復帰できる。
+    // 同一ブラウザの別タブは同じ身分を共有するため、後から開いたタブは先のタブをevictする
+    let t = localStorage.getItem('wiki_soccer_seat_token');
     if (!t) {
       t = crypto.randomUUID();
-      sessionStorage.setItem('wiki_soccer_seat_token', t);
+      localStorage.setItem('wiki_soccer_seat_token', t);
     }
     return t;
   };
