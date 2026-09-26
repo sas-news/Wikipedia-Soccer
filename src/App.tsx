@@ -5,7 +5,7 @@ import ArticleInspector from './components/ArticleInspector';
 import RulesModal, { CreatorLinks } from './components/RulesModal';
 import BackButton from './components/BackButton';
 import SharedResultView from './components/SharedResult';
-import { encodeResult, decodeResult, shareCodeToUrl, isSharedResult, type SharedResult } from './shared/result';
+import { encodeResult, decodeResult, shareCodeToUrl, isSharedResult, MAX_SHARE_HISTORY, type SharedResult } from './shared/result';
 
 type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting' | 'inspector' | 'result';
 
@@ -493,18 +493,28 @@ export default function App() {
       setShareUrl(null);
       return;
     }
+    // 履歴が上限を超える場合は先頭（スタート）+末尾側だけ残して省略マークを付ける
+    let entries = globalHistory.map(e => [e.title, e.player] as [string, 1 | 2]);
+    let truncated: { t: true; m: number } | undefined;
+    if (entries.length > MAX_SHARE_HISTORY) {
+      truncated = { t: true, m: entries.length - 1 };
+      entries = [entries[0], ...entries.slice(-(MAX_SHARE_HISTORY - 1))];
+    }
     const result: SharedResult = {
       v: 1,
       s: globalHistory[0].title,
       w: winner,
       g: [p1Target, p2Target],
-      h: globalHistory.map(e => [e.title, e.player] as [string, 1 | 2]),
+      h: entries,
+      ...truncated,
     };
     let alive = true;
     encodeResult(result).then(async code => {
-      // /r/<id> の自ドメイン短縮リンク（外部ホスト失敗時はロング ?r= URL）
-      const url = await shareCodeToUrl(code);
-      if (alive) setShareUrl(url);
+      // まず自己完結の ?r= URLを即座に共有可能にし、アップロード成功後に短い /r/<id> へ格上げ
+      const longUrl = `${window.location.origin}/?r=${code}`;
+      if (alive) setShareUrl(longUrl);
+      const shortUrl = await shareCodeToUrl(code);
+      if (alive) setShareUrl(shortUrl);
     });
     return () => { alive = false; };
   }, [phase, winner, globalHistory, p1Target, p2Target]);
@@ -1020,6 +1030,7 @@ export default function App() {
   if (phase === 'result' && sharedResult) {
     const r = sharedResult;
     return (
+      <>
       <SharedResultView
         result={r}
         onPlaySame={() => {
@@ -1049,6 +1060,15 @@ export default function App() {
         }}
         onToast={showToast}
       />
+      {toastMessage && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-4">
+          <div className="bg-gray-900 text-white px-6 py-3 rounded-full shadow-xl flex items-center gap-2 font-medium">
+            <AlertCircle className="w-5 h-5 text-red-400" />
+            {toastMessage}
+          </div>
+        </div>
+      )}
+      </>
     );
   }
 
@@ -1946,10 +1966,11 @@ emitStateUpdate({
               const shareText = isOnline
                 ? `Wikipedia Soccer | 「${globalHistory[0]?.title ?? ''}」から ${moves}手で「${goal}」に到達 — Player ${winner} の勝利！`
                 : `Wikipedia Soccer | 「${globalHistory[0]?.title ?? ''}」から ${moves}手で「${goal}」に到達！`;
-              const url = shareUrl ?? window.location.origin + window.location.pathname;
+              const url = shareUrl ?? '';
               return (
                 <div className="flex gap-2">
                   <button
+                    disabled={!shareUrl}
                     onClick={async () => {
                       if (navigator.share) {
                         try {
@@ -1967,15 +1988,17 @@ emitStateUpdate({
                         window.prompt('以下をコピーしてください', `${shareText} ${url}`);
                       }
                     }}
-                    className="flex-1 py-2 px-4 border-2 border-sky-500 text-sky-600 font-bold rounded-xl hover:bg-sky-50 transition-colors flex items-center justify-center gap-1.5 text-sm"
+                    className="flex-1 py-2 px-4 border-2 border-sky-500 text-sky-600 font-bold rounded-xl hover:bg-sky-50 transition-colors flex items-center justify-center gap-1.5 text-sm disabled:opacity-50 disabled:hover:bg-transparent"
                   >
                     <Share2 className="w-4 h-4" /> 結果をシェア
                   </button>
                   <a
-                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(url)}`}
+                    href={shareUrl ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(url)}` : undefined}
+                    aria-disabled={!shareUrl}
+                    onClick={e => { if (!shareUrl) e.preventDefault(); }}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex-1 py-2 px-4 border-2 border-gray-900 text-gray-900 font-bold rounded-xl hover:bg-gray-100 transition-colors flex items-center justify-center gap-1.5 text-sm"
+                    className={`flex-1 py-2 px-4 border-2 border-gray-900 text-gray-900 font-bold rounded-xl hover:bg-gray-100 transition-colors flex items-center justify-center gap-1.5 text-sm ${!shareUrl ? 'opacity-50 pointer-events-none' : ''}`}
                   >
                     Xでポスト
                   </a>

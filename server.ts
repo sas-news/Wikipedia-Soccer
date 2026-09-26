@@ -432,14 +432,16 @@ async function startServer() {
 
   // ?r= 結果共有パラメータのサーバー側デコード（OGP注入用。ブラウザ側は DecompressionStream）
   const decodeShareResultParam = (param: string): SharedResult | null => {
+    if (param.length > 64 * 1024) return null;
     const dot = param.indexOf('.');
     if (dot < 0) return null;
     const ver = param.slice(0, dot);
     const bytes = base64UrlDecode(param.slice(dot + 1));
     if (!bytes) return null;
     try {
+      // 非信頼入力の解凍なので展開後サイズを制限（zip bomb対策）
       const buf =
-        ver === 'd1' ? inflateRawSync(Buffer.from(bytes)) :
+        ver === 'd1' ? inflateRawSync(Buffer.from(bytes), { maxOutputLength: 512 * 1024 }) :
         ver === 'j1' ? Buffer.from(bytes) : null;
       if (!buf) return null;
       return parseSharedResult(buf.toString('utf8'));
@@ -733,10 +735,36 @@ async function startServer() {
   // (サーバー保存はRenderのephemeral diskで消えるため外部ホスト利用)
   const shareLimiter = makeRateLimiter(30);
   const shareCache = new Map<string, string>(); // code -> 'rs.xxx' 等の key
+  // 外部ホストの応答は64KBまでに制限（巨大レスポンスでのメモリ圧迫を防ぐ）
+  const readCappedText = async (r: Response, maxBytes = 64 * 1024): Promise<string | null> => {
+    const len = Number(r.headers.get('content-length') ?? 0);
+    if (len > maxBytes || !r.body) return null;
+    const reader = r.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel();
+          return null;
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+    return new TextDecoder().decode(buf).trim();
+  };
   const fetchText = async (url: string): Promise<string | null> => {
     const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!r.ok) return null;
-    return (await r.text()).trim();
+    return readCappedText(r);
   };
   const shareProviders: { key: string; upload: (code: string) => Promise<string | null>; read: (id: string) => Promise<string | null> }[] = [
     {
@@ -847,7 +875,7 @@ async function startServer() {
       const esc = (t: string) =>
         t.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       const goal = result.g[result.w - 1];
-      const moves = result.h.length - 1;
+      const moves = result.m ?? result.h.length - 1;
       const desc = `「${result.s}」から${moves}手で「${goal}」に到達 — Player ${result.w} の勝利`;
       const json = JSON.stringify(result).replace(/</g, '\\u003c');
       return cachedIndexHtml

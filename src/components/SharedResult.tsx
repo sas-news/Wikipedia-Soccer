@@ -24,7 +24,7 @@ export default function SharedResult({ result, onPlaySame, onExit, onToast }: Pr
   }, [result]);
   const winnerGoal = result.g[result.w - 1];
   const loserGoal = result.g[result.w === 1 ? 1 : 0];
-  const moves = result.h.length - 1;
+  const moves = result.m ?? result.h.length - 1;
   // h[0] はスタート地点（移動ではない）で player=1 として記録されるため -1
   const p1Moves = useMemo(() => result.h.filter(e => e[1] === 1).length - 1, [result]);
   const p2Moves = result.h.length - p1Moves - 1;
@@ -78,6 +78,11 @@ export default function SharedResult({ result, onPlaySame, onExit, onToast }: Pr
           <p className="mt-2 text-xs text-gray-400">
             惜敗側の目標: {loserGoal}
           </p>
+          {result.t && (
+            <p className="mt-1 text-xs text-gray-400">
+              ※長い対戦のため途中の履歴は省略されています
+            </p>
+          )}
         </div>
 
         <div className="space-y-2">

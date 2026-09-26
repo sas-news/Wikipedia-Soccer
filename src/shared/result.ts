@@ -12,10 +12,14 @@ export interface SharedResult {
   g: [string, string];
   /** 移動履歴 [タイトル, 手番プレイヤー]（先頭はスタート） */
   h: [string, 1 | 2][];
+  /** 履歴が途中まで省略されている（hは先頭1件+末尾側のみ） */
+  t?: true;
+  /** 省略されている場合の実際の総移動数 */
+  m?: number;
 }
 
-const MAX_TITLE_LEN = 200;
-const MAX_HISTORY = 500;
+const MAX_TITLE_LEN = 256;   // MediaWikiのタイトル上限255バイトに合わせた余裕値
+export const MAX_SHARE_HISTORY = 2000; // これを超える履歴は省略して共有する
 
 export function base64UrlEncode(bytes: Uint8Array): string {
   let bin = '';
@@ -37,14 +41,16 @@ export function base64UrlDecode(s: string): Uint8Array | null {
 /** オブジェクトがSharedResultの形か検証（サーバー埋め込み/URLデコード共通） */
 export function isSharedResult(o: unknown): o is SharedResult {
   if (typeof o !== 'object' || o === null || (o as { v?: unknown }).v !== 1) return false;
-  const r = o as { s?: unknown; w?: unknown; g?: unknown; h?: unknown };
+  const r = o as { s?: unknown; w?: unknown; g?: unknown; h?: unknown; t?: unknown; m?: unknown };
+  if (r.t !== undefined && r.t !== true) return false;
+  if (r.m !== undefined && (typeof r.m !== 'number' || !Number.isInteger(r.m) || r.m < 0)) return false;
   if (typeof r.s !== 'string' || !r.s || r.s.length > MAX_TITLE_LEN) return false;
   if (r.w !== 1 && r.w !== 2) return false;
   if (!Array.isArray(r.g) || r.g.length !== 2 ||
       r.g.some((t: unknown) => typeof t !== 'string' || !t || (t as string).length > MAX_TITLE_LEN)) {
     return false;
   }
-  if (!Array.isArray(r.h) || r.h.length === 0 || r.h.length > MAX_HISTORY) return false;
+  if (!Array.isArray(r.h) || r.h.length === 0 || r.h.length > MAX_SHARE_HISTORY) return false;
   for (const e of r.h) {
     if (!Array.isArray(e) || e.length !== 2) return false;
     if (typeof e[0] !== 'string' || !e[0] || e[0].length > MAX_TITLE_LEN) return false;
@@ -96,7 +102,8 @@ export async function shareCodeToUrl(code: string): Promise<string> {
   } catch {
     // fallthrough
   }
-  return `${window.location.origin}${window.location.pathname}?r=${code}`;
+  // フォールバックは /?r= に固定（/r/ 配下だと ?r= が読まれず結果が欠落する）
+  return `${window.location.origin}/?r=${code}`;
 }
 
 /** URLパラメータ文字列 → SharedResult（解釈不能なら null） */
