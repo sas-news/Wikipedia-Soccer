@@ -92,6 +92,8 @@ export default function App() {
   const [peerLeft, setPeerLeft] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const isFiringRandomMove = useRef(false);
+  const randomMoveRetries = useRef(0);
+  const pageLoadRetries = useRef(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const toastTimer = useRef<number | null>(null);
 
@@ -101,6 +103,7 @@ export default function App() {
     currentPage, currentTarget: '', movesMade, maxMoves: 0,
     turnHistory, globalHistory, timeLeft, turnTimeLimit, moveTimeLimit,
     p1Target, p2Target, socket, roomId, winner,
+    startPageMode, customStartPage, movesPhase1, movesPhaseN, pageLoaded,
   });
   useEffect(() => {
     latest.current = {
@@ -108,6 +111,7 @@ export default function App() {
       currentPage, currentTarget, movesMade, maxMoves,
       turnHistory, globalHistory, timeLeft, turnTimeLimit, moveTimeLimit,
       p1Target, p2Target, socket, roomId, winner,
+      startPageMode, customStartPage, movesPhase1, movesPhaseN, pageLoaded,
     };
   });
 
@@ -127,20 +131,20 @@ export default function App() {
     if (!socket) return;
 
     socket.on('sync_state', (state: any) => {
-      const me = latest.current.myPlayerNum;
       if (state.startPageMode !== undefined) setStartPageMode(state.startPageMode);
       if (state.customStartPage !== undefined) setCustomStartPage(state.customStartPage);
       if (state.movesPhase1 !== undefined) setMovesPhase1(state.movesPhase1);
       if (state.movesPhaseN !== undefined) setMovesPhaseN(state.movesPhaseN);
       if (state.turnTimeLimit !== undefined) setTurnTimeLimit(state.turnTimeLimit);
       if (state.moveTimeLimit !== undefined) setMoveTimeLimit(state.moveTimeLimit);
-      if (state.p1Target !== undefined && me !== 1) setP1Target(state.p1Target);
-      if (state.p2Target !== undefined && me !== 2) setP2Target(state.p2Target);
-      // ペア抽選は両者のゴールの共有更新として扱い、P2側のクライアントにも適用する
+      // ペア抽選値は先に適用し、個別編集(p1Target等)は後に適用＝新しい方が勝つ。
+      // サーバー側で無効化された席のエントリは undefined になるため各フィールドを確認
       if (state.pairTargets !== undefined) {
-        setP1Target(state.pairTargets.a);
-        setP2Target(state.pairTargets.b);
+        if (state.pairTargets.a !== undefined) setP1Target(state.pairTargets.a);
+        if (state.pairTargets.b !== undefined) setP2Target(state.pairTargets.b);
       }
+      if (state.p1Target !== undefined) setP1Target(state.p1Target);
+      if (state.p2Target !== undefined) setP2Target(state.p2Target);
       if (state.currentPlayer !== undefined) setCurrentPlayer(state.currentPlayer);
       if (state.turnCount !== undefined) setTurnCount(state.turnCount);
       if (state.movesMade !== undefined) setMovesMade(state.movesMade);
@@ -183,6 +187,7 @@ export default function App() {
     // 明示退出のみここに来る（回線断はpeer_left）
     socket.on('player_disconnected', () => {
       showToast('相手が退出しました。タイトルに戻ります。');
+      window.history.replaceState(null, '', window.location.pathname);
       setPhase('settings');
       socket.disconnect();
       setSocket(null);
@@ -216,7 +221,15 @@ export default function App() {
     });
 
     socket.on('sync_records', (records: PastGameRecord[]) => {
-      localStorage.setItem('wiki_soccer_past_records', JSON.stringify(records));
+      // ルーム履歴で全置換するとローカル対戦の履歴が消えるため id でマージする
+      const local: PastGameRecord[] = JSON.parse(
+        localStorage.getItem('wiki_soccer_past_records') || '[]'
+      );
+      const seen = new Set(local.map((r) => r.id));
+      const merged = [...local, ...(records || []).filter((r) => r && !seen.has(r.id))]
+        .sort((a, b) => Number(b.id) - Number(a.id))
+        .slice(0, 50);
+      localStorage.setItem('wiki_soccer_past_records', JSON.stringify(merged));
     });
 
     return () => {
@@ -242,23 +255,65 @@ export default function App() {
     }
   };
 
+  const clearRoomParam = () => {
+    window.history.replaceState(null, '', window.location.pathname);
+  };
+
+  // 退出通知が相手に届いてから切断する（ack 付き emit、タイムアウト付き）
+  const disconnectSocket = (s: Socket | null, r: string) => {
+    if (!s) return;
+    s.timeout(1500).emit('leave_room', { roomId: r }, () => s.disconnect());
+  };
+
   // オンライン対戦から明示退出してトップへ戻る（相手には player_disconnected が届く）
   const exitOnlineToSettings = () => {
     const { socket: s, roomId: r } = latest.current;
-    s?.emit('leave_room', { roomId: r });
-    s?.disconnect();
+    disconnectSocket(s, r);
+    clearRoomParam();
     setSocket(null);
     setIsOnline(false);
     setMyPlayerNum(null);
     setPeerLeft(false);
     setIsSuspended(false);
     setUndoRequest(null);
+    // ルームで同期された設定・対戦状態を初期値へ戻す
+    setP1Target('');
+    setP2Target('');
+    setPairStart(null);
+    setCustomStartPage('');
+    setStartPageMode('random');
+    setMovesPhase1(1);
+    setMovesPhaseN(2);
+    setTurnTimeLimit(0);
+    setMoveTimeLimit(0);
+    setPairDifficulty('medium');
+    setP1Ready(false);
+    setP2Ready(false);
+    setWinner(null);
+    setCurrentPage('');
+    setGlobalHistory([]);
+    setTurnHistory([]);
+    setMovesMade(0);
+    setTurnCount(1);
     setPhase('settings');
   };
 
-  const joinRoom = () => {
+  // 席の本人証明: 端末に保存するランダムトークンで回線断からの席復帰を可能にする
+  const seatToken = () => {
+    // sessionStorageにすることでタブごとに固有の身分になる（2タブでの対戦が可能）。
+    // リロードでは値が残るので席の復帰は引き続き機能し、タブを閉じると権利は放棄される
+    let t = sessionStorage.getItem('wiki_soccer_seat_token');
+    if (!t) {
+      t = crypto.randomUUID();
+      sessionStorage.setItem('wiki_soccer_seat_token', t);
+    }
+    return t;
+  };
+
+  const joinRoom = (idOverride?: string) => {
     if (isJoining) return;
-    if (!roomId) {
+    const raw = idOverride ?? roomId;
+    if (!raw || !raw.trim()) {
       showToast('Room IDを入力してください');
       return;
     }
@@ -267,23 +322,62 @@ export default function App() {
     setSocket(newSocket);
 
     // サーバー側と同じ正規化を行い、以後のemitは正規化後のIDで送る
-    const rid = roomId.trim().slice(0, 64);
+    const rid = raw.trim().toLowerCase().slice(0, 64);
     setRoomId(rid);
-    // 自動再接続（transport復帰）でも部屋に入り直す。初回connectもここで送られる
+
+    const joinTimeout = window.setTimeout(() => {
+      if (!latest.current.isOnline) {
+        newSocket.disconnect();
+        setSocket(null);
+        setIsJoining(false);
+        showToast('接続がタイムアウトしました');
+      }
+    }, 15000);
+
+    // 自動再接続（transport復帰）でも席を取り戻す。初回connectもここで送られる
     newSocket.on('connect', () => {
-      newSocket.emit('join_room', rid);
+      newSocket.emit('join_room', { roomId: rid, token: seatToken() });
+    });
+    newSocket.on('connect_error', () => {
+      showToast('サーバーに接続できません。再試行しています...');
+    });
+    // 席を他の接続に奪われたとき（サーバー側切断は自動再接続されない）
+    newSocket.on('evicted', () => {
+      window.clearTimeout(joinTimeout);
+      clearRoomParam();
+      setSocket(null);
+      setIsOnline(false);
+      setMyPlayerNum(null);
+      latest.current.myPlayerNum = null;
+      setPeerLeft(false);
+      setIsSuspended(false);
+      setPhase('settings');
+      showToast('同じプレイヤーが別の接続で復帰したため切断されました');
+    });
+    newSocket.on('disconnect', (reason) => {
+      if (reason !== 'io server disconnect') {
+        showToast('通信が切れました。再接続しています...');
+      }
     });
     newSocket.on('room_full', () => {
+      window.clearTimeout(joinTimeout);
       showToast('ルームが満員です');
       newSocket.disconnect();
       setSocket(null);
       setIsJoining(false);
     });
     newSocket.on('joined', (data: { playerNum: 1 | 2 | 'spectator'; roomId?: string }) => {
+      window.clearTimeout(joinTimeout);
       setMyPlayerNum(data.playerNum);
+      // 直後のsync_state(ownTarget)やgame_readyがlatest経由のロールを参照するため、
+      // レンダーを待たずに即反映する
+      latest.current.myPlayerNum = data.playerNum;
+      latest.current.isOnline = true;
+      latest.current.roomId = rid;
       setIsOnline(true);
       setIsJoining(false);
       if (data.roomId) setRoomId(data.roomId);
+      window.history.replaceState(null, '', `${window.location.pathname}?room=${encodeURIComponent(rid)}`);
       // 別ルームへの入室では前ゲームの目標を持ち越さない（同室への復帰はsync_stateで即復元される）
       setP1Target('');
       setP2Target('');
@@ -292,33 +386,51 @@ export default function App() {
         setPhase('online_waiting');
         showToast('観戦者として参加しました');
       } else {
-        setPhase('online_waiting');
-      }
-
-      newSocket.on('game_ready', () => {
-        setPhase('setup');
-        setP1Ready(false);
-        setP2Ready(false);
-        setPeerLeft(false);
-        if (data.playerNum === 1) {
-          newSocket.emit('sync_state', {
-            roomId: rid,
-            state: {
-              startPageMode,
-              customStartPage,
-              movesPhase1,
-              movesPhaseN,
-              turnTimeLimit,
-              moveTimeLimit,
-              phase: 'setup',
-              p1Ready: false,
-              p2Ready: false
-            }
-          });
+        // ゲーム途中への復帰は sync_state がすぐフェーズを戻すので待機画面を挟まない
+        const curPhase = latest.current.phase;
+        if (curPhase === 'settings' || curPhase === 'online_setup' || curPhase === 'online_waiting') {
+          setPhase('online_waiting');
         }
-      });
+      }
+    });
+    newSocket.on('game_ready', () => {
+      setPhase('setup');
+      setP1Ready(false);
+      setP2Ready(false);
+      setPeerLeft(false);
+      setWinner(null);
+      const cur = latest.current;
+      if (cur.myPlayerNum === 1 && cur.roomId) {
+        newSocket.emit('sync_state', {
+          roomId: cur.roomId,
+          state: {
+            startPageMode: cur.startPageMode,
+            customStartPage: cur.customStartPage,
+            movesPhase1: cur.movesPhase1,
+            movesPhaseN: cur.movesPhaseN,
+            turnTimeLimit: cur.turnTimeLimit,
+            moveTimeLimit: cur.moveTimeLimit,
+            phase: 'setup',
+            p1Ready: false,
+            p2Ready: false
+          }
+        });
+      }
     });
   };
+
+  // 共有リンク ?room= で開いたらそのまま参加
+  // StrictModeのマウント2回実行で二重join→自分のソケットをevictしないようrefで一度だけ
+  const autoJoinAttempted = useRef(false);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('room');
+    if (q && !autoJoinAttempted.current) {
+      autoJoinAttempted.current = true;
+      setRoomId(q);
+      setPhase('online_setup');
+      joinRoom(q);
+    }
+  }, []);
 
   const maxMoves = turnCount === 1 ? movesPhase1 : movesPhaseN;
   const currentTarget = currentPlayer === 1 ? p1Target : p2Target;
@@ -329,9 +441,28 @@ export default function App() {
     toastTimer.current = window.setTimeout(() => setToastMessage(null), 4000);
   };
 
+  // ゴールの妥当性: 名前空間不可・両者不一致・スタートと不一致
+  const validateTargets = (): string | null => {
+    if (p1Target.includes(':') || p2Target.includes(':')) {
+      return '「:」を含むページ（名前空間）はゴールに使えません';
+    }
+    if (p1Target === p2Target) return '両プレイヤーの目標が同じです';
+    if (startPageMode === 'custom' && customStartPage) {
+      if (customStartPage.includes(':')) return '「:」を含むページはスタートに使えません';
+      if (customStartPage === p1Target || customStartPage === p2Target) {
+        return 'スタートページと目標が同じです';
+      }
+    }
+    return null;
+  };
+
   const handleReady = (player: 1 | 2) => {
+    const target = player === 1 ? p1Target : p2Target;
+    const other = player === 1 ? p2Target : p1Target;
+    if (!target) return showToast('目標ページを設定してください');
+    if (target.includes(':')) return showToast('「:」を含むページはゴールに使えません');
+    if (other && target === other) return showToast('相手と同じ目標は設定できません');
     if (player === 1) {
-      if (!p1Target) return showToast('目標ページを設定してください');
       setP1Ready(true);
       if (isOnline && socket && roomId) {
         socket.emit('sync_state', { roomId, state: { p1Ready: true, p1Target } });
@@ -343,7 +474,6 @@ export default function App() {
         }
       }
     } else {
-      if (!p2Target) return showToast('目標ページを設定してください');
       setP2Ready(true);
       if (isOnline && socket && roomId) {
         socket.emit('sync_state', { roomId, state: { p2Ready: true, p2Target } });
@@ -360,6 +490,11 @@ export default function App() {
   const handleLocalReady = () => {
     if (!p1Target || !p2Target) {
       showToast('両プレイヤーの目標を設定してください');
+      return;
+    }
+    const err = validateTargets();
+    if (err) {
+      showToast(err);
       return;
     }
     setP1Ready(true);
@@ -400,20 +535,46 @@ export default function App() {
     }
   };
 
+  // 有効な移動先リンク(ns=0)が1件も無いページは対戦が詰むため弾く
+  const pageHasLinks = async (title: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`https://ja.wikipedia.org/w/api.php?action=query&prop=links&plnamespace=0&pllimit=1&format=json&origin=*&titles=${encodeURIComponent(title)}`);
+      const data = await res.json();
+      const page = Object.values(data?.query?.pages ?? {})[0] as { missing?: boolean; links?: unknown[] } | undefined;
+      if (!page || page.missing) return false;
+      return Array.isArray(page.links) && page.links.length > 0;
+    } catch {
+      return true; // 検証自体の失敗では開始を妨げない
+    }
+  };
+
   const startGame = async () => {
     if (!p1Target || !p2Target) {
       showToast('目標ページを設定してください');
       return;
     }
-    
+    const targetErr = validateTargets();
+    if (targetErr) {
+      showToast(targetErr);
+      return;
+    }
+
     setIsStarting(true);
     try {
       let startPage = '';
       if (startPageMode === 'custom' && customStartPage) {
+        if (!(await pageHasLinks(customStartPage))) {
+          showToast('スタートページが存在しないか有効なリンクがありません');
+          return;
+        }
         startPage = customStartPage;
       } else if (pairStart && pairStart.a === p1Target && pairStart.b === p2Target) {
         startPage = pairStart.start;
       } else {
+        startPage = await fetchTrueRandom();
+      }
+      // スタートがゴールと一致、または移動先が無いページなら引き直す
+      if (startPage === p1Target || startPage === p2Target || !(await pageHasLinks(startPage))) {
         startPage = await fetchTrueRandom();
       }
       
@@ -476,6 +637,8 @@ export default function App() {
     
     // Win condition check - ALWAYS allows navigation if it's the target page!
     if (decodedTitle === currentTarget) {
+      isFiringRandomMove.current = false;
+      randomMoveRetries.current = 0;
       setCurrentPage(decodedTitle);
       setNavCounter(c => c + 1);
       
@@ -539,37 +702,51 @@ export default function App() {
 
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
-      if (e.data) {
-        if (e.data.type === 'WIKI_LINK_CLICK') {
-          handleLinkClick(e.data.title);
-        } else if (e.data.type === 'WIKI_SCROLL' && isOnline && myPlayerNum === currentPlayer) {
-          socket?.emit('sync_scroll', { roomId, scrollY: e.data.scrollY });
-        } else if (e.data.type === 'WIKI_CURSOR' && isOnline && myPlayerNum === currentPlayer) {
-          socket?.emit('sync_cursor', { roomId, x: e.data.x, y: e.data.y });
-} else if (e.data.type === 'RANDOM_LINK_RESULT') {
-          if (e.data.title) {
-            let randomTitle = '';
-            try {
-              randomTitle = decodeURIComponent(e.data.title).replace(/_/g, ' ');
-            } catch(err) {
-              randomTitle = e.data.title.replace(/_/g, ' ');
-            }
-            if (randomTitle === currentPage) {
-              isFiringRandomMove.current = false;
-              const iframe = iframeRef.current;
-              if (iframe && iframe.contentWindow) {
-                iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK', currentTitle: currentPage }, '*');
-              }
-            } else {
-              handleLinkClick(e.data.title);
-            }
-          } else {
-            isFiringRandomMove.current = false;
-            const iframe = iframeRef.current;
-            if (iframe && iframe.contentWindow) {
-              iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK', currentTitle: currentPage }, '*');
-            }
+      if (!e.data) return;
+      if (e.data.type === 'WIKI_LINK_CLICK') {
+        handleLinkClick(e.data.title);
+      } else if (e.data.type === 'WIKI_PAGE_INFO') {
+        // iframeが表示している正規タイトル。リダイレクト吸収で着地した場合も勝利にする
+        let canon = '';
+        try {
+          canon = decodeURIComponent(String(e.data.title || '')).replace(/_/g, ' ');
+        } catch {
+          canon = String(e.data.title || '').replace(/_/g, ' ');
+        }
+        if (canon && canon !== currentPage && phase === 'playing' && canon === currentTarget) {
+          handleLinkClick(encodeURIComponent(canon));
+        }
+      } else if (e.data.type === 'WIKI_SCROLL' && isOnline && myPlayerNum === currentPlayer) {
+        socket?.emit('sync_scroll', { roomId, scrollY: e.data.scrollY });
+      } else if (e.data.type === 'WIKI_CURSOR' && isOnline && myPlayerNum === currentPlayer) {
+        socket?.emit('sync_cursor', { roomId, x: e.data.x, y: e.data.y });
+      } else if (e.data.type === 'RANDOM_LINK_RESULT') {
+        // 自動移動の発射に対する応答のみ処理（遅延到着の古い応答で勝手に動かない）
+        if (!isFiringRandomMove.current) return;
+        isFiringRandomMove.current = false;
+        let randomTitle = '';
+        if (e.data.title) {
+          try {
+            randomTitle = decodeURIComponent(e.data.title).replace(/_/g, ' ');
+          } catch {
+            randomTitle = String(e.data.title).replace(/_/g, ' ');
           }
+        }
+        if (randomTitle && randomTitle !== currentPage) {
+          randomMoveRetries.current = 0;
+          handleLinkClick(e.data.title);
+        } else if (randomMoveRetries.current < 3) {
+          // 自己リンク/有効リンクなしページ: 上限まで引き直す
+          randomMoveRetries.current += 1;
+          const iframe = iframeRef.current;
+          if (iframe && iframe.contentWindow) {
+            isFiringRandomMove.current = true;
+            iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK', currentTitle: currentPage }, '*');
+          }
+        } else {
+          // 有効リンクが尽きた → ターンを消費して交代（無限ループ防止）
+          randomMoveRetries.current = 0;
+          handleEndTurn();
         }
       }
     };
@@ -579,6 +756,7 @@ export default function App() {
 
   const handleEndTurn = () => {
     isFiringRandomMove.current = false;
+    randomMoveRetries.current = 0;
     if (isOnline && myPlayerNum !== currentPlayer) return;
     if (isSuspended || peerLeft) return;
     const nextPlayer = currentPlayer === 1 ? 2 : 1;
@@ -606,9 +784,11 @@ export default function App() {
           handleEndTurn();
         } else if (!isOnline || myPlayerNum === currentPlayer) {
           if (!isFiringRandomMove.current) {
-            isFiringRandomMove.current = true;
+            // iframe が無いときにフラグだけ立つと以後の自動移動が全て死ぬため、送信できる時だけ立てる
             const iframe = iframeRef.current;
             if (iframe && iframe.contentWindow) {
+              isFiringRandomMove.current = true;
+              randomMoveRetries.current = 0;
               iframe.contentWindow.postMessage({ type: 'GET_RANDOM_LINK', currentTitle: currentPage }, '*');
             }
           }
@@ -625,6 +805,24 @@ export default function App() {
 
     return () => clearTimeout(timerId);
   }, [timeLeft, phase, turnTimeLimit, moveTimeLimit, currentPage, currentPlayer, isSuspended, peerLeft, movesMade, maxMoves, pageLoaded]);
+
+  // プロキシ応答なしでページがいつまでも読めないときの再読み込み
+  useEffect(() => {
+    if (phase !== 'playing' || pageLoaded) {
+      pageLoadRetries.current = 0;
+      return;
+    }
+    const t = window.setTimeout(() => {
+      if (latest.current.pageLoaded) return;
+      if (pageLoadRetries.current < 2) {
+        pageLoadRetries.current += 1;
+        setNavCounter((c) => c + 1);
+      } else {
+        showToast('ページの読み込みに失敗しました。ネットワークを確認してください');
+      }
+    }, 15000);
+    return () => window.clearTimeout(t);
+  }, [phase, pageLoaded, iframeKey]);
 
   // undo_acceptハンドラからも呼ばれるため、可変状態はlatest経由で読む
   const executeUndo = () => {
@@ -697,8 +895,8 @@ export default function App() {
     localStorage.setItem(SAVE_KEY, JSON.stringify(stateToSave));
     setHasSaveData(true);
     if (isOnline) {
-      socket?.emit('leave_room', { roomId });
-      socket?.disconnect();
+      disconnectSocket(socket, roomId);
+      clearRoomParam();
       setSocket(null);
       setIsOnline(false);
       setPeerLeft(false);
@@ -784,11 +982,11 @@ export default function App() {
               <div className="flex gap-4">
                 <div className="flex-1">
                   <span className="text-xs text-gray-500 mb-1 block">1ターン目</span>
-                  <input type="number" min="1" max="10" value={movesPhase1} onChange={e => setMovesPhase1(Number(e.target.value) || 1)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-900"/>
+                  <input type="number" min="1" max="10" value={movesPhase1} onChange={e => setMovesPhase1(Math.min(10, Math.max(1, Number(e.target.value) || 1)))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-900"/>
                 </div>
                 <div className="flex-1">
                   <span className="text-xs text-gray-500 mb-1 block">2ターン目以降</span>
-                  <input type="number" min="1" max="10" value={movesPhaseN} onChange={e => setMovesPhaseN(Number(e.target.value) || 2)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-900"/>
+                  <input type="number" min="1" max="10" value={movesPhaseN} onChange={e => setMovesPhaseN(Math.min(10, Math.max(1, Number(e.target.value) || 2)))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-900"/>
                 </div>
               </div>
             </div>
@@ -830,9 +1028,15 @@ export default function App() {
 
               <button
                 onClick={() => {
-                  if (startPageMode === 'custom' && !customStartPage) {
-                    showToast('スタートページを指定してください');
-                    return;
+                  if (startPageMode === 'custom') {
+                    if (!customStartPage) {
+                      showToast('スタートページを指定してください');
+                      return;
+                    }
+                    if (customStartPage.includes(':')) {
+                      showToast('「:」を含むページ（名前空間）はスタートに使えません');
+                      return;
+                    }
                   }
                   if (p1Ready && p2Ready) {
                     setPhase('confirm');
@@ -1129,7 +1333,7 @@ export default function App() {
               />
             </div>
             <button
-              onClick={joinRoom}
+              onClick={() => joinRoom()}
               disabled={isJoining}
               className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg transition-colors"
             >
@@ -1156,6 +1360,22 @@ export default function App() {
           <Globe className="w-16 h-16 text-purple-600 mx-auto animate-pulse" />
           <h1 className="text-2xl font-bold text-gray-900">対戦相手を待っています...</h1>
           <p className="text-gray-600 font-medium">Room ID: <span className="font-bold text-purple-600">{roomId}</span></p>
+          <button
+            onClick={() => {
+              const url = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(roomId)}`;
+              if (navigator.clipboard?.writeText) {
+                navigator.clipboard.writeText(url).then(
+                  () => showToast('招待リンクをコピーしました'),
+                  () => showToast(url)
+                );
+              } else {
+                showToast(url);
+              }
+            }}
+            className="px-4 py-2 text-sm font-bold bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors"
+          >
+            招待リンクをコピー
+          </button>
           <div className="flex justify-center">
             <BackButton onClick={exitOnlineToSettings} label="ルームを退出してトップへ" />
           </div>
@@ -1225,7 +1445,7 @@ export default function App() {
             <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 text-sm space-y-3">
               <div className="flex justify-between">
                 <span className="text-gray-500 font-bold">スタートページ:</span>
-                <span className="font-bold text-gray-900">{startPageMode === 'random' ? 'ランダム設定' : customStartPage}</span>
+                <span className="font-bold text-gray-900">{startPageMode === 'random' ? (pairStart && pairStart.a === p1Target && pairStart.b === p2Target ? `対称スタート: ${pairStart.start}` : 'ランダム設定') : customStartPage}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500 font-bold">制限時間:</span>
@@ -1240,11 +1460,11 @@ export default function App() {
             <div className="space-y-3">
               <div className="p-4 bg-red-50 border border-red-100 rounded-xl flex justify-between items-center">
                 <span className="font-bold text-red-700">Player 1 の目標:</span>
-                {(myPlayerNum === 1 || myPlayerNum === 'spectator' || !isOnline) ? <HiddenTargetItem target={p1Target} /> : <span className="font-bold text-gray-400">????????</span>}
+                {myPlayerNum === 'spectator' ? <span className="font-bold text-gray-400">????????</span> : (myPlayerNum === 1 || !isOnline) ? <HiddenTargetItem target={p1Target} /> : <span className="font-bold text-gray-400">????????</span>}
               </div>
               <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl flex justify-between items-center">
                 <span className="font-bold text-blue-700">Player 2 の目標:</span>
-                {(myPlayerNum === 2 || myPlayerNum === 'spectator' || !isOnline) ? <HiddenTargetItem target={p2Target} /> : <span className="font-bold text-gray-400">????????</span>}
+                {myPlayerNum === 'spectator' ? <span className="font-bold text-gray-400">????????</span> : (myPlayerNum === 2 || !isOnline) ? <HiddenTargetItem target={p2Target} /> : <span className="font-bold text-gray-400">????????</span>}
               </div>
             </div>
 
@@ -1298,7 +1518,6 @@ emitStateUpdate({
   }
 
   const isP1 = currentPlayer === 1;
-  const targetDisplay = showTarget ? currentTarget : '目を離して確認 →';
   const isMyTurn = !isOnline || myPlayerNum === currentPlayer;
   const isSpectator = myPlayerNum === 'spectator';
   
@@ -1513,7 +1732,7 @@ emitStateUpdate({
         </div>
       )}
 
-      {undoRequest && undoRequest.fromPlayer !== myPlayerNum && (
+      {undoRequest && !isSpectator && undoRequest.fromPlayer !== myPlayerNum && (
         <div className="absolute inset-0 z-40 bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
           <div className="bg-white rounded-2xl shadow-2xl p-8 text-center space-y-4 max-w-sm mx-4">
             <div className="mx-auto w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center">
@@ -1600,12 +1819,30 @@ emitStateUpdate({
             <button
               onClick={() => {
                 if (isOnline) {
+                  if (isSpectator) {
+                    // 観戦者が再戦を発火できないよう退出のみ許可
+                    exitOnlineToSettings();
+                    return;
+                  }
                    setP1Target('');
                    setP2Target('');
                    setP1Ready(false);
                    setP2Ready(false);
+                   setWinner(null);
+                   setCurrentPage('');
+                   setGlobalHistory([]);
+                   setTurnHistory([]);
+                   setMovesMade(0);
+                   setTurnCount(1);
+                   setTimeLeft(0);
                    setPhase('setup');
-                   emitStateUpdate({ p1Target: '', p2Target: '', pairTargets: { a: '', b: '' }, phase: 'setup', p1Ready: false, p2Ready: false });
+                   // 前ゲームの残骸キー（winner/currentPage等）を残さないよう全面リセットして送る
+                   emitStateUpdate({
+                     p1Target: '', p2Target: '', pairTargets: { a: '', b: '' },
+                     phase: 'setup', p1Ready: false, p2Ready: false,
+                     winner: null, currentPage: '', globalHistory: [], turnHistory: [],
+                     movesMade: 0, turnCount: 1, timeLeft: 0, pageLoaded: false,
+                   });
                 } else {
                    setPhase('settings');
                    setP1Target('');
@@ -1614,8 +1851,16 @@ emitStateUpdate({
               }}
               className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-xl transition-colors"
             >
-              {isOnline ? 'もう一度遊ぶ（再戦）' : '最初から遊ぶ'}
+              {isOnline ? (isSpectator ? '観戦を終了する' : 'もう一度遊ぶ（再戦）') : '最初から遊ぶ'}
             </button>
+            {isOnline && !isSpectator && (
+              <button
+                onClick={exitOnlineToSettings}
+                className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                ルームを退出してトップへ戻る
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1631,6 +1876,8 @@ emitStateUpdate({
           key={iframeKey}
           ref={iframeRef}
           title="Wikipedia"
+          // Wiki側スクリプトからlocalStorageや自オリジンを守る。注入スクリプトは動作する
+          sandbox="allow-scripts"
           src={currentPage ? `/proxy/wiki/${encodeURIComponent(currentPage)}` : ''}
           onLoad={() => {
             setPageLoaded(true);
@@ -1652,6 +1899,7 @@ function WikiAutocomplete({ value, onChange, placeholder }: { value: string, onC
   const [results, setResults] = useState<string[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const debounceRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     let val = e.target.value;
@@ -1678,13 +1926,18 @@ function WikiAutocomplete({ value, onChange, placeholder }: { value: string, onC
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     
     debounceRef.current = window.setTimeout(async () => {
+      // 古い入力の応答が新しい入力を上書きしないよう abort する
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
       try {
-        const res = await fetch(`https://ja.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(value)}&limit=5&format=json&origin=*`);
+        const res = await fetch(`https://ja.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(value)}&limit=5&format=json&origin=*`, { signal: ac.signal });
         const data = await res.json();
+        if (ac.signal.aborted) return;
         setResults(data[1] || []);
         if (data[1]?.length > 0) setIsOpen(true);
       } catch (e) {
-        console.error('Search failed', e);
+        if (!ac.signal.aborted) console.error('Search failed', e);
       }
     }, 300);
     

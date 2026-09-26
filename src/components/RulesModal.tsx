@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { X, Target, Repeat, Globe, Lightbulb, Trophy, Github } from 'lucide-react';
 
@@ -91,6 +92,15 @@ const TurnDiagram = () => (
 );
 
 export default function RulesModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <div
@@ -149,7 +159,7 @@ export default function RulesModal({ open, onClose }: { open: boolean; onClose: 
             <ul className="list-disc pl-5 space-y-1">
               <li><b>Room IDを共有</b>して参加。先に入った2人が対戦、3人目以降は観戦者</li>
               <li>回線が切れても<b>同じRoom IDで入り直せば途中から再開</b>できます</li>
-              <li>「中断」で両者一時停止、「保存して中断」から再開できます</li>
+              <li>「中断」で両者一時停止、「再開」でプレイ再開（セーブはローカル対戦のみ）</li>
             </ul>
           </section>
 
@@ -164,6 +174,9 @@ export default function RulesModal({ open, onClose }: { open: boolean; onClose: 
           </section>
 
           <footer className="pt-4 border-t border-gray-200 space-y-2">
+            <p className="text-xs text-gray-400 text-center">
+              記事本文は <a href="https://ja.wikipedia.org" target="_blank" rel="noreferrer" className="underline">Wikipedia</a> のコンテンツです（CC BY-SA 4.0 / GFDL）。各記事の履歴・著者は記事ページ内のリンクから確認できます。
+            </p>
             <p className="text-xs text-gray-500 font-bold text-center">制作者リンク</p>
             <CreatorLinks />
           </footer>

@@ -31,6 +31,9 @@ const BAND_MAP: Record<string, PairBand> = {
   very_hard: 'hard',
 };
 
+/** リクエストで許容する difficulty 値（プリセット + 出題帯リテラル。weak/near/far は出題対象外） */
+const VALID_DIFFICULTIES = new Set([...Object.keys(BAND_MAP), 'ideal', 'hard']);
+
 /** 「語として難しい」系統を弾くカテゴリ（部分一致）: 元号・条約等の形式名・用語集・旧国家・スタブ・一覧 */
 const HARD_WORD_CATS = [
   '元号', '条約', '法令', '法典', '用語',
@@ -87,17 +90,25 @@ router.get('/match', async (req, res) => {
   try {
     const difficulty = req.query.difficulty as string | undefined;
     const fixedA = req.query.a as string | undefined;
+    if (difficulty !== undefined && !VALID_DIFFICULTIES.has(difficulty)) {
+      return res.status(400).json({
+        error: `unknown difficulty: "${difficulty}"`,
+        valid: [...VALID_DIFFICULTIES],
+      });
+    }
     const bands = resolveBand(difficulty);
     const fame = resolveFame(difficulty);
 
     const stats = getPoolStats();
     if (stats.eligible === 0 || stats.pairs === 0) {
-      const fallback = await fetchRandomArticles(3, { noCache: true });
+      const fallback = await fetchRandomArticles(3);
       return res.json({
         a: fallback[0],
         b: fallback[1] ?? fallback[0],
         start: fallback[2] ?? fallback[0],
         fallback: true,
+        difficulty: difficulty ?? 'ideal',
+        band: 'random',
         message:
           '連想プールが未構築です。`npx tsx src/server/pool-collect.ts` → `npx tsx src/server/assoc.ts` を実行してください。',
       });

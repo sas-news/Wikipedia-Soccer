@@ -11,30 +11,6 @@ function shuffleArray<T>(arr: T[]): T[] {
   return array;
 }
 
-class SimpleCache {
-  private cache = new Map<string, { value: unknown; expiry: number }>();
-
-  get<T>(key: string): T | undefined {
-    const entry = this.cache.get(key);
-    if (!entry) return undefined;
-    if (Date.now() > entry.expiry) {
-      this.cache.delete(key);
-      return undefined;
-    }
-    return entry.value as T;
-  }
-
-  set<T>(key: string, value: T, ttlMs: number): void {
-    this.cache.set(key, { value, expiry: Date.now() + ttlMs });
-  }
-
-  clear(): void {
-    this.cache.clear();
-  }
-}
-
-const apiCache = new SimpleCache();
-const CACHE_TTL_SHORT = 60 * 60 * 1000;
 const BASE_API_URL = 'https://ja.wikipedia.org/w/api.php';
 
 interface WikiApiResponse<T> {
@@ -108,21 +84,10 @@ async function fetchWithRetry(
   throw new Error(`Failed to fetch ${url} after ${retries} retries`);
 }
 
-export async function fetchRandomArticles(
-  count = 1,
-  options?: { noCache?: boolean }
-): Promise<string[]> {
-  const noCache = options?.noCache ?? false;
-  const cacheKey = `random:${count}`;
-
-  if (!noCache) {
-    const cached = apiCache.get<string[]>(cacheKey);
-    if (cached) return cached;
-  }
-
-  const fetchCount = noCache ? Math.max(count, 20) : count;
-  const cacheBuster = noCache ? `&_cb=${Date.now()}` : '';
-  const url = `${BASE_API_URL}?action=query&list=random&rnnamespace=0&rnlimit=${fetchCount}&format=json&origin=*${cacheBuster}`;
+/** 完全ランダムな記事タイトルを count 件返す（毎回新規取得・多めに取ってシャッフル） */
+export async function fetchRandomArticles(count = 1): Promise<string[]> {
+  const fetchCount = Math.max(count, 20);
+  const url = `${BASE_API_URL}?action=query&list=random&rnnamespace=0&rnlimit=${fetchCount}&format=json&origin=*&_cb=${Date.now()}`;
 
   const res = await fetchWithRetry(url);
   const data = (await res.json()) as WikiApiResponse<{ random: RandomPage[] }>;
@@ -131,14 +96,6 @@ export async function fetchRandomArticles(
     throw new Error(`Wiki API error: ${data.error.code} - ${data.error.info}`);
   }
 
-  let result = (data.query?.random || []).map((p) => p.title);
-
-  if (noCache) {
-    result = shuffleArray(result).slice(0, count);
-  }
-
-  if (!noCache) {
-    apiCache.set(cacheKey, result, CACHE_TTL_SHORT);
-  }
-  return result;
+  const result = (data.query?.random || []).map((p) => p.title);
+  return shuffleArray(result).slice(0, count);
 }

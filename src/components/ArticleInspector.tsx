@@ -87,18 +87,27 @@ export default function ArticleInspector({ onBack }: Props) {
 
   useEffect(() => {
     if (tab !== 'articles') return;
-    setLoading(true);
-    const params = new URLSearchParams({ limit: '300' });
-    if (eligibleOnly) params.set('eligible', '1');
-    if (search.trim()) params.set('q', search.trim());
-    fetch(`/api/pool/articles?${params}`)
-      .then((r) => r.json())
-      .then((d) => {
-        setArticles(d.articles || []);
-        setTotal(d.total || 0);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+    const ctrl = new AbortController();
+    const t = window.setTimeout(() => {
+      setLoading(true);
+      const params = new URLSearchParams({ limit: '300' });
+      if (eligibleOnly) params.set('eligible', '1');
+      if (search.trim()) params.set('q', search.trim());
+      fetch(`/api/pool/articles?${params}`, { signal: ctrl.signal })
+        .then((r) => r.json())
+        .then((d) => {
+          setArticles(d.articles || []);
+          setTotal(d.total || 0);
+          setLoading(false);
+        })
+        .catch((e) => {
+          if (e?.name !== 'AbortError') setLoading(false);
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(t);
+      ctrl.abort();
+    };
   }, [tab, eligibleOnly, search]);
 
   useEffect(() => {

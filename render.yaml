@@ -7,7 +7,8 @@ services:
     plan: free
     region: singapore
     branch: main
-    buildCommand: npm ci && npm run build && (if [ -f data/difficulty.db.gz ]; then gzip -dkf data/difficulty.db.gz; fi)
+    # DB展開失敗はビルドを止めない（ペア出題がフォールバック動作に落ちるだけ）
+    buildCommand: npm ci && npm run build && (if [ -f data/difficulty.db.gz ]; then gzip -dkf data/difficulty.db.gz || { rm -f data/difficulty.db; echo 'WARNING: difficulty.db.gz 展開失敗 — フォールバック出題で起動します'; }; fi)
     startCommand: npm run start
     healthCheckPath: /healthz
     envVars:
