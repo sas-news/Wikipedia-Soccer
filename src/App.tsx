@@ -304,9 +304,12 @@ export default function App() {
     // 同一ブラウザの別タブは同じ身分を共有するため、後から開いたタブは先のタブをevictする
     let t = localStorage.getItem('wiki_soccer_seat_token');
     if (!t) {
-      t = crypto.randomUUID();
-      localStorage.setItem('wiki_soccer_seat_token', t);
+      // sessionStorage時代のトークンを一度だけ引き継ぐ（更新直後の対戦中復帰用）
+      t = sessionStorage.getItem('wiki_soccer_seat_token');
+      if (t) sessionStorage.removeItem('wiki_soccer_seat_token');
     }
+    if (!t) t = crypto.randomUUID();
+    localStorage.setItem('wiki_soccer_seat_token', t);
     return t;
   };
 
