@@ -18,7 +18,8 @@ import {
 import type { PairBand } from '../pool';
 
 const router = Router();
-const BANDS: PairBand[] = ['ideal', 'hard', 'near', 'weak'];
+// weakペアは収集時に保存しないため帯フィルタからも除外（残っているのは旧DBのみ）
+const BANDS: PairBand[] = ['ideal', 'hard', 'near'];
 
 /** クエリを安全な整数に変換（非数・NaN・負数は undefined に倒す） */
 function toInt(v: unknown): number | undefined {

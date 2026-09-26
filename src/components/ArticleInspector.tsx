@@ -8,7 +8,7 @@ const BAND_LABELS: Record<string, string> = {
   near: '近すぎ',
   weak: '関連薄め',
 };
-const BAND_ORDER = ['ideal', 'hard', 'near', 'weak'];
+const BAND_ORDER = ['ideal', 'hard', 'near'];
 const BAND_DESC: Record<string, string> = {
   ideal: 'ゲームで出題される帯（連想距離がちょうど良い組み合わせ）',
   hard: 'ゲームの「難しい」で出題される帯（遠いが届く）',

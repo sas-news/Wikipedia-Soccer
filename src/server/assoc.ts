@@ -156,6 +156,9 @@ async function main() {
       });
       if (!band) continue;
       bandCount[band] = (bandCount[band] ?? 0) + 1;
+      // weakは出題対象外（VALID_DIFFICULTIESに含まれない）のため保存しない。
+      // 件数はbandCountで計数して終了時ログに出す
+      if (band === 'weak') continue;
       batch.push({
         a,
         b,
