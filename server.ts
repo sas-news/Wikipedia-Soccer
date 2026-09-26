@@ -1,6 +1,8 @@
 import express from 'express';
 import compression from 'compression';
 import path from 'path';
+import fs from 'fs';
+import { gunzipSync } from 'zlib';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import { initDatabase, closeDatabase } from './src/server/db';
@@ -67,7 +69,31 @@ function makeSocketThrottle(perSec: number) {
 const WIKI_PAGE_UA =
   'WikipediaSoccerGame/1.0 (https://github.com/sas-news/Wikipedia-Soccer; in-game proxy)';
 
+/** プールDBの配置先と取得元（render.yaml のビルド時DLと同じアセット） */
+const POOL_DB_URL =
+  process.env.POOL_DB_URL ??
+  'https://github.com/sas-news/Wikipedia-Soccer/releases/download/data-latest/difficulty.db.gz';
+const POOL_DB_PATH = path.join(process.cwd(), 'data', 'difficulty.db');
+const POOL_DB_MIN_BYTES = 1024 * 1024; // 1MB未満は展開失敗の残骸とみなす
+
+/** DB未配置でも起動時に自力取得してフォールバック出題を防ぐ（ビルド時DL失敗・ローカル未fetchを自癒） */
+async function ensurePoolDb(): Promise<void> {
+  try {
+    if (fs.existsSync(POOL_DB_PATH) && fs.statSync(POOL_DB_PATH).size >= POOL_DB_MIN_BYTES) return;
+    console.log('[pool] DB未配置 — リリースアセットから取得します...');
+    const res = await fetch(POOL_DB_URL);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const raw = gunzipSync(Buffer.from(await res.arrayBuffer()));
+    fs.mkdirSync(path.dirname(POOL_DB_PATH), { recursive: true });
+    fs.writeFileSync(POOL_DB_PATH, raw);
+    console.log(`[pool] DB配置完了 (${raw.length} bytes)`);
+  } catch (e) {
+    console.warn('[pool] DB取得失敗 — フォールバック出題で起動します:', e);
+  }
+}
+
 async function startServer() {
+  await ensurePoolDb();
   initDatabase();
   initPoolSchema();
 

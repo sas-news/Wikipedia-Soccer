@@ -1182,7 +1182,9 @@ export default function App() {
                 </div>
                 {pairStart && (
                   <p className="text-xs text-purple-600">
-                    {DIFFICULTY_LABELS[pairStart.difficulty] ?? pairStart.band}帯で抽選
+                    {pairStart.band === 'random'
+                      ? 'プール未構築のためランダム抽選（デプロイ/DB取得を確認）'
+                      : `${DIFFICULTY_LABELS[pairStart.difficulty] ?? pairStart.band}帯で抽選`}
                     {pairStart.difficulty === 'hard' && pairStart.band === 'ideal' ? '（hard候補なし→ちょうど良い帯に退避）' : ''} / 対称スタート候補: {pairStart.start}（ランダム開始時に使用）
                   </p>
                 )}
