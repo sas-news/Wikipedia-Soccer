@@ -727,6 +727,66 @@ async function startServer() {
   // Associative pair-draw API
   app.use('/api', matchRoutes);
   app.use('/api', poolRoutes);
+
+  // ?r= 結果リンクの短縮URL発行。長すぎる ?r= URLをそのままSNSに貼れないため外部短縮サービス経由で短縮する。
+  // 自オリジンの結果リンクのみ許可（外部URLの短縮代行化を防止）
+  const shortenLimiter = makeRateLimiter(30);
+  const shortenCache = new Map<string, string>();
+  // is.gd/v.gd は sasnews.dev をブロックしているため使えない。spoo.me→ulvis.net の順で試す
+  const shortenProviders: ((longUrl: string) => Promise<string | null>)[] = [
+    async (longUrl) => {
+      const r = await fetch('https://spoo.me/', {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `url=${encodeURIComponent(longUrl)}`,
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = await r.json().catch(() => null) as { short_url?: string } | null;
+      const u = data?.short_url;
+      return u ? u.replace(/^http:\/\//, 'https://') : null;
+    },
+    async (longUrl) => {
+      const r = await fetch(`https://ulvis.net/api.php?url=${encodeURIComponent(longUrl)}`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      const text = (await r.text()).trim();
+      return text.startsWith('https://ulvis.net/') ? text : null;
+    },
+  ];
+  app.get('/api/shorten', async (req, res) => {
+    const raw = typeof req.query.url === 'string' ? req.query.url : '';
+    let longUrl: URL;
+    try {
+      longUrl = new URL(raw);
+    } catch {
+      return res.status(400).json({ error: 'bad url' });
+    }
+    if (longUrl.host !== req.headers.host || longUrl.pathname !== '/' || !longUrl.searchParams.get('r')) {
+      return res.status(403).json({ error: 'only own ?r= links' });
+    }
+    const cached = shortenCache.get(longUrl.href);
+    if (cached) return res.json({ url: cached });
+    if (!shortenLimiter(req.ip || 'unknown')) {
+      return res.json({ url: longUrl.href });
+    }
+    for (const provider of shortenProviders) {
+      try {
+        const short = await provider(longUrl.href);
+        if (!short) continue;
+        if (shortenCache.size >= 500) {
+          const oldest = shortenCache.keys().next().value;
+          if (oldest !== undefined) shortenCache.delete(oldest);
+        }
+        shortenCache.set(longUrl.href, short);
+        return res.json({ url: short });
+      } catch {
+        // 次のプロバイダへ
+      }
+    }
+    // 全プロバイダ失敗時はロングURLをそのまま返す
+    res.json({ url: longUrl.href });
+  });
+
   app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 
   // Render etc. のヘルスチェック用（稼働中ルーム数も併記）

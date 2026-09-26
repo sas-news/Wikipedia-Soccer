@@ -5,7 +5,7 @@ import ArticleInspector from './components/ArticleInspector';
 import RulesModal, { CreatorLinks } from './components/RulesModal';
 import BackButton from './components/BackButton';
 import SharedResultView from './components/SharedResult';
-import { encodeResult, decodeResult, type SharedResult } from './shared/result';
+import { encodeResult, decodeResult, shortenShareUrl, type SharedResult } from './shared/result';
 
 type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting' | 'inspector' | 'result';
 
@@ -472,8 +472,11 @@ export default function App() {
       h: globalHistory.map(e => [e.title, e.player] as [string, 1 | 2]),
     };
     let alive = true;
-    encodeResult(result).then(code => {
-      if (alive) setShareUrl(`${window.location.origin}${window.location.pathname}?r=${code}`);
+    encodeResult(result).then(async code => {
+      const longUrl = `${window.location.origin}${window.location.pathname}?r=${code}`;
+      // SNS/チャットで貼れるよう is.gd 短縮（失敗時はロングURLのまま）
+      const url = await shortenShareUrl(longUrl);
+      if (alive) setShareUrl(url);
     });
     return () => { alive = false; };
   }, [phase, winner, globalHistory, p1Target, p2Target]);
@@ -991,7 +994,8 @@ export default function App() {
     return (
       <SharedResultView
         result={r}
-        shareUrl={shareUrl ?? `${window.location.origin}${window.location.pathname}?r=${new URLSearchParams(window.location.search).get('r')}`}
+        // リザルト画面側で短縮するためロングURLを渡す
+        shareUrl={`${window.location.origin}${window.location.pathname}?r=${new URLSearchParams(window.location.search).get('r')}`}
         onPlaySame={() => {
           // 同じスタート・目標でローカル対戦を開始
           window.history.replaceState(null, '', window.location.pathname);

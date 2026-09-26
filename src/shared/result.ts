@@ -72,6 +72,18 @@ export async function encodeResult(r: SharedResult): Promise<string> {
   return `j1.${base64UrlEncode(json)}`;
 }
 
+/** 長い ?r= URLをサーバー経由で短縮。失敗・拒否時は元URLをそのまま返す */
+export async function shortenShareUrl(longUrl: string): Promise<string> {
+  try {
+    const res = await fetch(`/api/shorten?url=${encodeURIComponent(longUrl)}`);
+    if (!res.ok) return longUrl;
+    const data = await res.json();
+    return typeof data.url === 'string' && data.url ? data.url : longUrl;
+  } catch {
+    return longUrl;
+  }
+}
+
 /** URLパラメータ文字列 → SharedResult（解釈不能なら null） */
 export async function decodeResult(param: string): Promise<SharedResult | null> {
   const dot = param.indexOf('.');

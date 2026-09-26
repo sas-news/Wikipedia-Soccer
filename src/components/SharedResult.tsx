@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Trophy, Share2, Play, Home, ExternalLink } from 'lucide-react';
-import type { SharedResult } from '../shared/result';
+import { shortenShareUrl, type SharedResult } from '../shared/result';
 
 interface Props {
   result: SharedResult;
@@ -12,6 +12,13 @@ interface Props {
 
 // ?r= で共有された対戦結果の閲覧画面（結果の再生・同一お題での再対戦につなぐ）
 export default function SharedResult({ result, shareUrl, onPlaySame, onExit, onToast }: Props) {
+  // shareUrl はロング ?r= URL。表示・再シェアは短縮版を使う
+  const [shortUrl, setShortUrl] = useState(shareUrl);
+  useEffect(() => {
+    let alive = true;
+    shortenShareUrl(shareUrl).then(u => { if (alive) setShortUrl(u); });
+    return () => { alive = false; };
+  }, [shareUrl]);
   const winnerGoal = result.g[result.w - 1];
   const loserGoal = result.g[result.w === 1 ? 1 : 0];
   const moves = result.h.length - 1;
@@ -81,17 +88,17 @@ export default function SharedResult({ result, shareUrl, onPlaySame, onExit, onT
               onClick={async () => {
                 if (navigator.share) {
                   try {
-                    await navigator.share({ title: 'Wikipedia Soccer', text: shareText, url: shareUrl });
+                    await navigator.share({ title: 'Wikipedia Soccer', text: shareText, url: shortUrl });
                     return;
                   } catch {
                     // キャンセル時はクリップボードへ
                   }
                 }
                 try {
-                  await navigator.clipboard.writeText(`${shareText} ${shareUrl}`);
+                  await navigator.clipboard.writeText(`${shareText} ${shortUrl}`);
                   onToast('結果リンクをコピーしました');
                 } catch {
-                  window.prompt('以下をコピーしてください', `${shareText} ${shareUrl}`);
+                  window.prompt('以下をコピーしてください', `${shareText} ${shortUrl}`);
                 }
               }}
               className="flex-1 py-2 px-4 border-2 border-sky-500 text-sky-600 font-bold rounded-xl hover:bg-sky-50 transition-colors flex items-center justify-center gap-1.5 text-sm"
@@ -99,7 +106,7 @@ export default function SharedResult({ result, shareUrl, onPlaySame, onExit, onT
               <Share2 className="w-4 h-4" /> 結果をシェア
             </button>
             <a
-              href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`}
+              href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shortUrl)}`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex-1 py-2 px-4 border-2 border-gray-900 text-gray-900 font-bold rounded-xl hover:bg-gray-100 transition-colors flex items-center justify-center gap-1.5 text-sm"
