@@ -31,8 +31,8 @@ const BAND_MAP: Record<string, PairBand> = {
   very_hard: 'hard',
 };
 
-/** リクエストで許容する difficulty 値（プリセット + 出題帯リテラル。weak/near/far は出題対象外） */
-const VALID_DIFFICULTIES = new Set([...Object.keys(BAND_MAP), 'ideal', 'hard']);
+/** リクエストで許容する difficulty 値（プリセット + 出題帯リテラル。weak/far は出題対象外） */
+const VALID_DIFFICULTIES = new Set([...Object.keys(BAND_MAP), 'ideal', 'hard', 'near']);
 
 /** 「語として難しい」系統を弾くカテゴリ（部分一致）: 元号・条約等の形式名・用語集・旧国家・スタブ・一覧 */
 const HARD_WORD_CATS = [
@@ -52,7 +52,7 @@ const FAME_MAP: Record<string, FameGate> = {
 
 function resolveBand(difficulty?: string): PairBand[] {
   if (!difficulty) return ['ideal'];
-  if (difficulty === 'ideal' || difficulty === 'hard') {
+  if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'near') {
     return [difficulty];
   }
   // hard要求時のみidealへフォールバック。ideal要求時にhardへ落とすと
@@ -63,7 +63,7 @@ function resolveBand(difficulty?: string): PairBand[] {
 
 function resolveFame(difficulty?: string): FameGate | undefined {
   if (!difficulty) return undefined;
-  if (difficulty === 'ideal' || difficulty === 'hard') return undefined;
+  if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'near') return undefined;
   const g = FAME_MAP[difficulty];
   return g && g.pv > 0 ? g : undefined;
 }
