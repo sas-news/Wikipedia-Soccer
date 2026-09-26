@@ -48,6 +48,8 @@ const FAME_MAP: Record<string, FameGate> = {
   medium: { pv: 2000, li: 200, pvRescue: 8000, blockCats: HARD_WORD_CATS, blockYear: true }, // 中堅語まで（260記事/2818組）
   hard: { pv: 0, li: 0, pvRescue: 0 },
   very_hard: { pv: 0, li: 0, pvRescue: 0 },
+  // 近すぎ＝早い者勝ちモード。意味の難しい語が出ると台無しなので中堅語フロアを掛ける
+  near: { pv: 2000, li: 200, pvRescue: 8000, blockCats: HARD_WORD_CATS, blockYear: true },
 };
 
 function resolveBand(difficulty?: string): PairBand[] {
@@ -63,7 +65,7 @@ function resolveBand(difficulty?: string): PairBand[] {
 
 function resolveFame(difficulty?: string): FameGate | undefined {
   if (!difficulty) return undefined;
-  if (difficulty === 'ideal' || difficulty === 'hard' || difficulty === 'near') return undefined;
+  if (difficulty === 'ideal' || difficulty === 'hard') return undefined;
   const g = FAME_MAP[difficulty];
   return g && g.pv > 0 ? g : undefined;
 }
