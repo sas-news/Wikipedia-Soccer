@@ -4,8 +4,10 @@ import { io, Socket } from 'socket.io-client';
 import ArticleInspector from './components/ArticleInspector';
 import RulesModal, { CreatorLinks } from './components/RulesModal';
 import BackButton from './components/BackButton';
+import SharedResultView from './components/SharedResult';
+import { encodeResult, decodeResult, shareCodeToUrl, isSharedResult, MAX_SHARE_HISTORY, type SharedResult } from './shared/result';
 
-type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting' | 'inspector';
+type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting' | 'inspector' | 'result';
 
 type HistoryEntry = { title: string; player: 1 | 2 };
 
@@ -99,6 +101,8 @@ export default function App() {
   const [isJoining, setIsJoining] = useState(false);
   const [peerLeft, setPeerLeft] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const [sharedResult, setSharedResult] = useState<SharedResult | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
   const isFiringRandomMove = useRef(false);
   const randomMoveRetries = useRef(0);
   const pageLoadRetries = useRef(0);
@@ -430,7 +434,51 @@ export default function App() {
   // StrictModeのマウント2回実行で二重join→自分のソケットをevictしないようrefで一度だけ
   const autoJoinAttempted = useRef(false);
   useEffect(() => {
-    const q = new URLSearchParams(window.location.search).get('room');
+    // /r/<id> リンクの本番ページはサーバーが結果をHTML埋め込みで返す
+    const embedded = (window as unknown as { __SHARED_RESULT__?: unknown }).__SHARED_RESULT__;
+    if (embedded) {
+      if (isSharedResult(embedded)) {
+        setSharedResult(embedded);
+        setPhase('result');
+      }
+      return;
+    }
+    // 開発モード等でHTML埋め込みがない /r/ パスはAPIから結果を引く
+    const rid = window.location.pathname.match(/^\/r\/([A-Za-z0-9_.-]+)$/);
+    if (rid) {
+      fetch(`/api/result/${rid[1]}`)
+        .then(res => (res.ok ? res.json() : null))
+        .then(res => {
+          if (res && isSharedResult(res)) {
+            setSharedResult(res);
+            setPhase('result');
+          } else {
+            showToast('結果リンクが見つかりませんでした');
+            window.history.replaceState(null, '', '/');
+          }
+        })
+        .catch(() => {
+          showToast('結果リンクが見つかりませんでした');
+          window.history.replaceState(null, '', '/');
+        });
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    // 結果共有リンク ?r= があればリザルト画面を最優先で表示
+    const r = params.get('r');
+    if (r) {
+      decodeResult(r).then(res => {
+        if (res) {
+          setSharedResult(res);
+          setPhase('result');
+        } else {
+          showToast('結果リンクを読み込めませんでした');
+          clearRoomParam();
+        }
+      });
+      return;
+    }
+    const q = params.get('room');
     if (q && !autoJoinAttempted.current) {
       autoJoinAttempted.current = true;
       setRoomId(q);
@@ -438,6 +486,38 @@ export default function App() {
       joinRoom(q);
     }
   }, []);
+
+  // 勝利画面に入ったら結果埋め込みURL (?r=) を生成してシェアに使う
+  useEffect(() => {
+    if (phase !== 'won' || !winner || globalHistory.length === 0) {
+      setShareUrl(null);
+      return;
+    }
+    // 履歴が上限を超える場合は先頭（スタート）+末尾側だけ残して省略マークを付ける
+    let entries = globalHistory.map(e => [e.title, e.player] as [string, 1 | 2]);
+    let truncated: { t: true; m: number } | undefined;
+    if (entries.length > MAX_SHARE_HISTORY) {
+      truncated = { t: true, m: entries.length - 1 };
+      entries = [entries[0], ...entries.slice(-(MAX_SHARE_HISTORY - 1))];
+    }
+    const result: SharedResult = {
+      v: 1,
+      s: globalHistory[0].title,
+      w: winner,
+      g: [p1Target, p2Target],
+      h: entries,
+      ...truncated,
+    };
+    let alive = true;
+    encodeResult(result).then(async code => {
+      // まず自己完結の ?r= URLを即座に共有可能にし、アップロード成功後に短い /r/<id> へ格上げ
+      const longUrl = `${window.location.origin}/?r=${code}`;
+      if (alive) setShareUrl(longUrl);
+      const shortUrl = await shareCodeToUrl(code);
+      if (alive) setShareUrl(shortUrl);
+    });
+    return () => { alive = false; };
+  }, [phase, winner, globalHistory, p1Target, p2Target]);
 
   const maxMoves = turnCount === 1 ? movesPhase1 : movesPhaseN;
   const currentTarget = currentPlayer === 1 ? p1Target : p2Target;
@@ -945,6 +1025,52 @@ export default function App() {
     localStorage.removeItem(SAVE_KEY);
     setHasSaveData(false);
   };
+
+  // 共有結果の閲覧画面 (?r= で開いたとき)
+  if (phase === 'result' && sharedResult) {
+    const r = sharedResult;
+    return (
+      <>
+      <SharedResultView
+        result={r}
+        onPlaySame={() => {
+          // 同じスタート・目標でローカル対戦を開始（/r/ や ?r= パスを消す）
+          window.history.replaceState(null, '', '/');
+          setSharedResult(null);
+          setStartPageMode('custom');
+          setCustomStartPage(r.s);
+          setP1Target(r.g[0]);
+          setP2Target(r.g[1]);
+          setPairStart(null);
+          setP1Ready(true);
+          setP2Ready(true);
+          setWinner(null);
+          setCurrentPage('');
+          setGlobalHistory([]);
+          setTurnHistory([]);
+          setMovesMade(0);
+          setTurnCount(1);
+          setTimeLeft(0);
+          setPhase('confirm');
+        }}
+        onExit={() => {
+          window.history.replaceState(null, '', '/');
+          setSharedResult(null);
+          setPhase('settings');
+        }}
+        onToast={showToast}
+      />
+      {toastMessage && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-4">
+          <div className="bg-gray-900 text-white px-6 py-3 rounded-full shadow-xl flex items-center gap-2 font-medium">
+            <AlertCircle className="w-5 h-5 text-red-400" />
+            {toastMessage}
+          </div>
+        </div>
+      )}
+      </>
+    );
+  }
 
   // Setup View Array
   if (phase === 'settings') {
@@ -1836,39 +1962,43 @@ emitStateUpdate({
             
             {(() => {
               const goal = winner === 1 ? p1Target : p2Target;
+              const moves = globalHistory.length - 1;
               const shareText = isOnline
-                ? `Wikipedia Soccer: Player ${winner} が目標「${goal}」に到達して勝利！`
-                : `Wikipedia Soccer: 目標「${goal}」に到達！`;
-              const shareUrl = window.location.origin + window.location.pathname;
+                ? `Wikipedia Soccer | 「${globalHistory[0]?.title ?? ''}」から ${moves}手で「${goal}」に到達 — Player ${winner} の勝利！`
+                : `Wikipedia Soccer | 「${globalHistory[0]?.title ?? ''}」から ${moves}手で「${goal}」に到達！`;
+              const url = shareUrl ?? '';
               return (
                 <div className="flex gap-2">
                   <button
+                    disabled={!shareUrl}
                     onClick={async () => {
                       if (navigator.share) {
                         try {
-                          await navigator.share({ title: 'Wikipedia Soccer', text: shareText, url: shareUrl });
+                          await navigator.share({ title: 'Wikipedia Soccer', text: shareText, url });
                           return;
                         } catch {
                           // キャンセル時はクリップボードへ
                         }
                       }
                       try {
-                        await navigator.clipboard.writeText(`${shareText} ${shareUrl}`);
-                        showToast('結果をコピーしました');
+                        await navigator.clipboard.writeText(`${shareText} ${url}`);
+                        showToast('結果リンクをコピーしました');
                       } catch {
                         // クリップボードも使えない環境では選択可能なダイアログで渡す
-                        window.prompt('以下をコピーしてください', `${shareText} ${shareUrl}`);
+                        window.prompt('以下をコピーしてください', `${shareText} ${url}`);
                       }
                     }}
-                    className="flex-1 py-2 px-4 border-2 border-sky-500 text-sky-600 font-bold rounded-xl hover:bg-sky-50 transition-colors flex items-center justify-center gap-1.5 text-sm"
+                    className="flex-1 py-2 px-4 border-2 border-sky-500 text-sky-600 font-bold rounded-xl hover:bg-sky-50 transition-colors flex items-center justify-center gap-1.5 text-sm disabled:opacity-50 disabled:hover:bg-transparent"
                   >
                     <Share2 className="w-4 h-4" /> 結果をシェア
                   </button>
                   <a
-                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`}
+                    href={shareUrl ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(url)}` : undefined}
+                    aria-disabled={!shareUrl}
+                    onClick={e => { if (!shareUrl) e.preventDefault(); }}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex-1 py-2 px-4 border-2 border-gray-900 text-gray-900 font-bold rounded-xl hover:bg-gray-100 transition-colors flex items-center justify-center gap-1.5 text-sm"
+                    className={`flex-1 py-2 px-4 border-2 border-gray-900 text-gray-900 font-bold rounded-xl hover:bg-gray-100 transition-colors flex items-center justify-center gap-1.5 text-sm ${!shareUrl ? 'opacity-50 pointer-events-none' : ''}`}
                   >
                     Xでポスト
                   </a>
