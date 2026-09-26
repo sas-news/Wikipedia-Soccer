@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe, Loader2, HelpCircle, LogOut } from 'lucide-react';
+import { Search, Play, RotateCcw, ArrowRight, Trophy, AlertCircle, Eye, EyeOff, Save, Trash2, Dices, Globe, Loader2, HelpCircle, LogOut, Share2 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import ArticleInspector from './components/ArticleInspector';
 import RulesModal, { CreatorLinks } from './components/RulesModal';
@@ -195,13 +195,9 @@ export default function App() {
     // 明示退出のみここに来る（回線断はpeer_left）
     socket.on('player_disconnected', () => {
       showToast('相手が退出しました。タイトルに戻ります。');
-      window.history.replaceState(null, '', window.location.pathname);
-      setPhase('settings');
-      socket.disconnect();
-      setSocket(null);
-      setIsOnline(false);
-      setPeerLeft(false);
-      setMyPlayerNum(null);
+      // 残された側も同期済みの目標・ready・対戦状態を全リセットしないと、
+      // ローカル対戦開始時に放棄されたオンライン対戦のconfirm画面が復活する
+      exitOnlineToSettings();
     });
 
     socket.on('suspend', () => {
@@ -1027,16 +1023,23 @@ export default function App() {
                 <option value="turn-30">ターン制限: 30秒</option>
                 <option value="turn-60">ターン制限: 60秒</option>
                 <option value="turn-120">ターン制限: 120秒</option>
+                <option value="turn-180">ターン制限: 180秒</option>
+                <option value="turn-300">ターン制限: 300秒</option>
                 <option value="move-10">1移動制限: 10秒</option>
                 <option value="move-15">1移動制限: 15秒</option>
                 <option value="move-20">1移動制限: 20秒</option>
                 <option value="move-30">1移動制限: 30秒</option>
+                <option value="move-45">1移動制限: 45秒</option>
+                <option value="move-60">1移動制限: 60秒</option>
+                <option value="move-90">1移動制限: 90秒</option>
+                <option value="move-120">1移動制限: 120秒</option>
               </select>
               <p className="text-xs text-gray-500">
                 {moveTimeLimit > 0 ? '時間切れでランダムなリンクに自動移動します' : turnTimeLimit > 0 ? '時間切れでターンが交代します' : '時間制限なしでプレイします'}
               </p>
             </div>
 
+            <div className="flex gap-2">
               <button
                 onClick={() => {
                   if (startPageMode === 'custom') {
@@ -1055,21 +1058,17 @@ export default function App() {
                     setPhase('setup');
                   }
                 }}
-              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg transition-colors"
-            >
-              {p1Ready && p2Ready ? '保存して戻る' : '目標設定に進む'}
-            </button>
-
-            {!isOnline && (
-              <div className="pt-4 border-t border-gray-200 space-y-3">
-                <button
-                  onClick={() => setPhase('online_setup')}
-                  className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  <Globe className="w-5 h-5"/> オンライン対戦
-                </button>
-              </div>
-            )}
+                className="flex-1 py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg transition-colors"
+              >
+                {p1Ready && p2Ready ? '保存して戻る' : 'ローカル対戦'}
+              </button>
+              <button
+                onClick={() => setPhase('online_setup')}
+                className="flex-1 py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <Globe className="w-5 h-5"/> オンライン対戦
+              </button>
+            </div>
 
             {hasSaveData && (
               <div className="pt-4 border-t border-gray-200">
@@ -1497,10 +1496,15 @@ export default function App() {
             </button>
             <div className="flex gap-2 mt-2">
               <button
-                 onClick={() => setPhase('settings')}
+                 onClick={() => {
+                   // オンライン中は退出処理を必ず通す（部屋に残ったままトップへ行くと
+                   // 接続が生きたまま別操作できてしまう）
+                   if (isOnline) exitOnlineToSettings();
+                   else setPhase('settings');
+                 }}
                  className="flex-1 py-3 text-gray-600 hover:text-gray-800 text-xs font-bold transition-colors bg-gray-100 hover:bg-gray-200 rounded-xl"
               >
-                 全設定
+                 {isOnline ? '退出してトップへ' : '設定画面に戻る'}
               </button>
               <button
                  onClick={() => {
@@ -1830,6 +1834,48 @@ emitStateUpdate({
               </div>
             </div>
             
+            {(() => {
+              const goal = winner === 1 ? p1Target : p2Target;
+              const shareText = isOnline
+                ? `Wikipedia Soccer: Player ${winner} が目標「${goal}」に到達して勝利！`
+                : `Wikipedia Soccer: 目標「${goal}」に到達！`;
+              const shareUrl = window.location.origin + window.location.pathname;
+              return (
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      if (navigator.share) {
+                        try {
+                          await navigator.share({ title: 'Wikipedia Soccer', text: shareText, url: shareUrl });
+                          return;
+                        } catch {
+                          // キャンセル時はクリップボードへ
+                        }
+                      }
+                      try {
+                        await navigator.clipboard.writeText(`${shareText} ${shareUrl}`);
+                        showToast('結果をコピーしました');
+                      } catch {
+                        // クリップボードも使えない環境では選択可能なダイアログで渡す
+                        window.prompt('以下をコピーしてください', `${shareText} ${shareUrl}`);
+                      }
+                    }}
+                    className="flex-1 py-2 px-4 border-2 border-sky-500 text-sky-600 font-bold rounded-xl hover:bg-sky-50 transition-colors flex items-center justify-center gap-1.5 text-sm"
+                  >
+                    <Share2 className="w-4 h-4" /> 結果をシェア
+                  </button>
+                  <a
+                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 py-2 px-4 border-2 border-gray-900 text-gray-900 font-bold rounded-xl hover:bg-gray-100 transition-colors flex items-center justify-center gap-1.5 text-sm"
+                  >
+                    Xでポスト
+                  </a>
+                </div>
+              );
+            })()}
+
             <button
               onClick={() => {
                 if (isOnline) {
@@ -1858,9 +1904,21 @@ emitStateUpdate({
                      movesMade: 0, turnCount: 1, timeLeft: 0, pageLoaded: false,
                    });
                 } else {
-                   setPhase('settings');
+                   // 終局後は対戦状態を全て初期化してトップへ（readyフラグが残ると
+                   // 設定画面のボタンが「保存して戻る」のままになる）
                    setP1Target('');
                    setP2Target('');
+                   setPairStart(null);
+                   setP1Ready(false);
+                   setP2Ready(false);
+                   setWinner(null);
+                   setCurrentPage('');
+                   setGlobalHistory([]);
+                   setTurnHistory([]);
+                   setMovesMade(0);
+                   setTurnCount(1);
+                   setTimeLeft(0);
+                   setPhase('settings');
                 }
               }}
               className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 text-white font-bold rounded-xl transition-colors"
