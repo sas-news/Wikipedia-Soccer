@@ -742,6 +742,12 @@ async function startServer() {
     const reader = r.body.getReader();
     const chunks: Uint8Array[] = [];
     let total = 0;
+    // ヘッダ到着後のfetchタイムアウトは効かないため、ボディ読み取りに別途期限を設ける
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      reader.cancel().catch(() => {});
+    }, 10000);
     try {
       for (;;) {
         const { done, value } = await reader.read();
@@ -753,7 +759,11 @@ async function startServer() {
         }
         chunks.push(value);
       }
+      if (timedOut) return null;
+    } catch {
+      return null;
     } finally {
+      clearTimeout(timer);
       reader.releaseLock();
     }
     const buf = new Uint8Array(total);

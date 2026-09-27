@@ -5,7 +5,7 @@ import ArticleInspector from './components/ArticleInspector';
 import RulesModal, { CreatorLinks } from './components/RulesModal';
 import BackButton from './components/BackButton';
 import SharedResultView from './components/SharedResult';
-import { encodeResult, decodeResult, shareCodeToUrl, isSharedResult, MAX_SHARE_HISTORY, type SharedResult } from './shared/result';
+import { encodeResult, decodeResult, shareCodeToUrl, isSharedResult, type SharedResult } from './shared/result';
 
 type Phase = 'settings' | 'history' | 'setup' | 'confirm' | 'playing' | 'won' | 'online_setup' | 'online_waiting' | 'inspector' | 'result';
 
@@ -493,23 +493,17 @@ export default function App() {
       setShareUrl(null);
       return;
     }
-    // 履歴が上限を超える場合は先頭（スタート）+末尾側だけ残して省略マークを付ける
-    let entries = globalHistory.map(e => [e.title, e.player] as [string, 1 | 2]);
-    let truncated: { t: true; m: number } | undefined;
-    if (entries.length > MAX_SHARE_HISTORY) {
-      truncated = { t: true, m: entries.length - 1 };
-      entries = [entries[0], ...entries.slice(-(MAX_SHARE_HISTORY - 1))];
-    }
     const result: SharedResult = {
       v: 1,
       s: globalHistory[0].title,
       w: winner,
       g: [p1Target, p2Target],
-      h: entries,
-      ...truncated,
+      h: globalHistory.map(e => [e.title, e.player] as [string, 1 | 2]),
     };
     let alive = true;
+    // encodeResult がサーバー受理上限に収まるまで履歴を自動間引きする（上限超過なら null）
     encodeResult(result).then(async code => {
+      if (!code) return;
       // まず自己完結の ?r= URLを即座に共有可能にし、アップロード成功後に短い /r/<id> へ格上げ
       const longUrl = `${window.location.origin}/?r=${code}`;
       if (alive) setShareUrl(longUrl);

@@ -16,6 +16,8 @@ export interface SharedResult {
   t?: true;
   /** 省略されている場合の実際の総移動数 */
   m?: number;
+  /** 省略されている場合の [P1の手数, P2の手数] */
+  c?: [number, number];
 }
 
 const MAX_TITLE_LEN = 256;   // MediaWikiのタイトル上限255バイトに合わせた余裕値
@@ -41,9 +43,14 @@ export function base64UrlDecode(s: string): Uint8Array | null {
 /** オブジェクトがSharedResultの形か検証（サーバー埋め込み/URLデコード共通） */
 export function isSharedResult(o: unknown): o is SharedResult {
   if (typeof o !== 'object' || o === null || (o as { v?: unknown }).v !== 1) return false;
-  const r = o as { s?: unknown; w?: unknown; g?: unknown; h?: unknown; t?: unknown; m?: unknown };
+  const r = o as { s?: unknown; w?: unknown; g?: unknown; h?: unknown; t?: unknown; m?: unknown; c?: unknown };
   if (r.t !== undefined && r.t !== true) return false;
   if (r.m !== undefined && (typeof r.m !== 'number' || !Number.isInteger(r.m) || r.m < 0)) return false;
+  if (r.c !== undefined &&
+      (!Array.isArray(r.c) || r.c.length !== 2 ||
+       r.c.some((n: unknown) => typeof n !== 'number' || !Number.isInteger(n) || n < 0))) {
+    return false;
+  }
   if (typeof r.s !== 'string' || !r.s || r.s.length > MAX_TITLE_LEN) return false;
   if (r.w !== 1 && r.w !== 2) return false;
   if (!Array.isArray(r.g) || r.g.length !== 2 ||
@@ -74,14 +81,49 @@ async function pipeThrough(bytes: Uint8Array, stream: TransformStream<Uint8Array
   return new Uint8Array(await new Response(out).arrayBuffer());
 }
 
-/** SharedResult → URLパラメータ文字列 ("d1.<b64>" / 圧縮非対応環境は "j1.<b64>") */
-export async function encodeResult(r: SharedResult): Promise<string> {
-  const json = new TextEncoder().encode(JSON.stringify(r));
-  if (typeof CompressionStream !== 'undefined') {
-    const deflated = await pipeThrough(json, new CompressionStream('deflate-raw'));
-    return `d1.${base64UrlEncode(deflated)}`;
+// サーバー側の受理上限（/api/share のコード長・inflateRawSync の出力上限）と一致させる
+const MAX_CODE_LEN = 20000;
+const MAX_JSON_BYTES = 512 * 1024;
+
+function countMovesPerPlayer(h: [string, 1 | 2][]): [number, number] {
+  // h[0] はスタート地点（player=1 で記録されるが移動ではない）
+  const p1 = h.reduce((n, e) => n + (e[1] === 1 ? 1 : 0), 0) - 1;
+  return [p1, h.length - p1 - 1];
+}
+
+/** 履歴の中間を半分に間引き、省略フラグと元の手数情報を保持する */
+function shrinkResult(r: SharedResult): SharedResult {
+  const keep = Math.max(2, Math.floor(r.h.length / 2));
+  return {
+    ...r,
+    h: [r.h[0], ...r.h.slice(-(keep - 1))],
+    t: true,
+    m: r.m ?? r.h.length - 1,
+    c: r.c ?? countMovesPerPlayer(r.h),
+  };
+}
+
+/** SharedResult → URLパラメータ文字列 ("d1.<b64>")。
+ *  サーバーが受理できるサイズ（コード長・展開後JSON）に収まるまで履歴を間引き、
+ *  収まらない/無効な結果なら null を返す */
+export async function encodeResult(r: SharedResult): Promise<string | null> {
+  let cur = r;
+  for (let i = 0; i < 20; i++) {
+    const jsonBytes = new TextEncoder().encode(JSON.stringify(cur));
+    if (cur.h.length > MAX_SHARE_HISTORY || jsonBytes.byteLength > MAX_JSON_BYTES) {
+      if (cur.h.length <= 2) return null;
+      cur = shrinkResult(cur);
+      continue;
+    }
+    if (!isSharedResult(cur)) return null;
+    const code = typeof CompressionStream !== 'undefined'
+      ? `d1.${base64UrlEncode(await pipeThrough(jsonBytes, new CompressionStream('deflate-raw')))}`
+      : `j1.${base64UrlEncode(jsonBytes)}`;
+    if (code.length <= MAX_CODE_LEN) return code;
+    if (cur.h.length <= 2) return null;
+    cur = shrinkResult(cur);
   }
-  return `j1.${base64UrlEncode(json)}`;
+  return null;
 }
 
 /** 結果コードをサーバー経由で外部ホストに預け、自ドメインの短い /r/<id> URLを得る。

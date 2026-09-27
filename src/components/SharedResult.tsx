@@ -19,15 +19,19 @@ export default function SharedResult({ result, onPlaySame, onExit, onToast }: Pr
       setShareUrl(window.location.href);
       return;
     }
-    encodeResult(result).then(shareCodeToUrl).then(u => { if (alive) setShareUrl(u); });
+    encodeResult(result)
+      .then(code => (code ? shareCodeToUrl(code) : null))
+      .then(u => { if (alive && u) setShareUrl(u); });
     return () => { alive = false; };
   }, [result]);
   const winnerGoal = result.g[result.w - 1];
   const loserGoal = result.g[result.w === 1 ? 1 : 0];
   const moves = result.m ?? result.h.length - 1;
-  // h[0] はスタート地点（移動ではない）で player=1 として記録されるため -1
-  const p1Moves = useMemo(() => result.h.filter(e => e[1] === 1).length - 1, [result]);
-  const p2Moves = result.h.length - p1Moves - 1;
+  // h[0] はスタート地点（移動ではない）で player=1 として記録されるため -1。
+  // 省略済み結果では result.c に実際の個人別手数が入る
+  const countedP1 = useMemo(() => result.h.filter(e => e[1] === 1).length - 1, [result]);
+  const countedP2 = result.h.length - countedP1 - 1;
+  const [p1Moves, p2Moves] = result.c ?? [countedP1, countedP2];
   const shareText = `Wikipedia Soccer | 「${result.s}」から ${moves}手で「${winnerGoal}」に到達！`;
   const url = shareUrl ?? window.location.href;
 
