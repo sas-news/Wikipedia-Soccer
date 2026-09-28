@@ -1660,7 +1660,7 @@ emitStateUpdate({
   const isSpectator = myPlayerNum === 'spectator';
   
   return (
-    <div className="h-screen w-full flex flex-col bg-slate-100 overflow-hidden relative">
+    <div className="ws-game-root w-full flex flex-col bg-slate-100 overflow-hidden relative">
       {!isMyTurn && !isSpectator && isOnline && phase === 'playing' && (
         <div className="absolute top-0 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white px-6 py-1 rounded-b-xl shadow-lg font-bold text-sm animate-pulse">
           Player {currentPlayer} のターン
@@ -1676,7 +1676,7 @@ emitStateUpdate({
           観戦中 - Player {currentPlayer}のターン
         </div>
       )}
-      <div className="flex-none bg-white border-b shadow-sm z-10 w-full relative">
+      <div className="flex-none bg-white border-b shadow-sm z-10 w-full relative touch-none">
         <div className="absolute top-0 left-0 w-full h-1 bg-gray-200">
           <div 
             className={`h-full transition-all duration-300 ${isP1 ? 'bg-red-500' : 'bg-blue-500'}`} 

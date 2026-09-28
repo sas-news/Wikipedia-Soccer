@@ -544,7 +544,21 @@ async function startServer() {
           /* Hide search and forms to prevent cheating */
           form, input, #p-search, .cdx-search-input, .vector-search-box { display: none !important; }
           #content { margin-left: 0 !important; margin-top: 0 !important; padding-top: 1rem !important; }
-          body { background-color: #ffffff; }
+          /* Vector/Wikipedia 標準の目次UIはゲーム用ドロワーに置き換える（ページ上部に固まって出るのを防ぐ） */
+          .vector-toc-pinned-container, .vector-toc-unpinned-container, #vector-toc-unpinned-container, #vector-toc, .vector-toc-landmark, .mw-table-of-contents, .vector-page-titlebar-toc, .vector-sticky-header-toc, #vector-page-titlebar-toc { display: none !important; }
+          body { background-color: #ffffff; padding-top: 40px !important; }
+          html { scroll-padding-top: 44px; }
+          /* 常駐タイトルバー: どの位置にいても現在ページ名を表示 */
+          #ws-bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 2147483000; background: rgba(255,255,255,.97); border-bottom: 1px solid #d8d8d8; display: flex; align-items: center; gap: 8px; padding: 0 10px; font-family: -apple-system, 'Hiragino Kaku Gothic ProN', sans-serif; }
+          #ws-bar .ws-ttl { flex: 1; min-width: 0; font-size: 14px; font-weight: bold; color: #202122; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          #ws-toc-btn { flex: none; font-size: 13px; font-weight: bold; color: #202122; background: #f8f9fa; border: 1px solid #a2a9b1; border-radius: 6px; padding: 6px 10px; }
+          /* 目次ドロワー: ページのどの位置からでも開ける */
+          #ws-toc { position: fixed; top: 40px; bottom: 0; left: 0; width: 280px; max-width: 85vw; z-index: 2147483001; background: #fff; border-right: 1px solid #d8d8d8; box-shadow: 2px 0 12px rgba(0,0,0,.2); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 6px 0 24px; font-family: sans-serif; }
+          #ws-toc[hidden] { display: none; }
+          #ws-toc a { display: block; padding: 9px 16px; color: #3366cc; font-size: 14px; line-height: 1.4; text-decoration: none; }
+          #ws-toc a:active { background: #eaecf0; }
+          #ws-toc a.lv3 { padding-left: 32px; font-size: 13px; color: #54595d; }
+          #ws-toc .ws-toc-empty { padding: 12px 16px; color: #72777d; font-size: 13px; }
         </style>
         <script>
           // Report the canonical title so the parent can score redirect hits
@@ -694,6 +708,58 @@ async function startServer() {
               }
             }
           });
+
+          // ゲーム用タイトルバー＋目次ドロワー（サイト標準の目次UIはCSSで非表示にしている）
+          try {
+            var wsBar = document.createElement('div');
+            wsBar.id = 'ws-bar';
+            var wsTocBtn = document.createElement('button');
+            wsTocBtn.id = 'ws-toc-btn';
+            wsTocBtn.type = 'button';
+            wsTocBtn.textContent = '目次';
+            var wsTtl = document.createElement('span');
+            wsTtl.className = 'ws-ttl';
+            wsTtl.textContent = canon || (document.title || '').replace(/ - Wikipedia.*$/, '');
+            wsBar.appendChild(wsTocBtn);
+            wsBar.appendChild(wsTtl);
+
+            var wsToc = document.createElement('nav');
+            wsToc.id = 'ws-toc';
+            wsToc.hidden = true;
+            var wsHeadings = document.querySelectorAll('.mw-parser-output h2, .mw-parser-output h3, #mw-content-text h2, #mw-content-text h3');
+            var wsCount = 0;
+            Array.prototype.forEach.call(wsHeadings, function(h) {
+              var headEl = h.querySelector('.mw-headline') || h;
+              var id = h.id || headEl.id;
+              var text = (headEl.textContent || '').replace(/\[.*?\]/g, '').trim();
+              if (!id || !text) return;
+              var a = document.createElement('a');
+              a.setAttribute('href', '#' + encodeURIComponent(id));
+              a.textContent = text;
+              if (h.tagName === 'H3') a.className = 'lv3';
+              wsToc.appendChild(a);
+              wsCount++;
+            });
+            if (wsCount === 0) {
+              var wsEmpty = document.createElement('div');
+              wsEmpty.className = 'ws-toc-empty';
+              wsEmpty.textContent = 'このページに目次はありません';
+              wsToc.appendChild(wsEmpty);
+            }
+            document.body.appendChild(wsBar);
+            document.body.appendChild(wsToc);
+
+            wsTocBtn.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              wsToc.hidden = !wsToc.hidden;
+            });
+            // 項目タップで閉じる（スクロール自体は既存のアンカーハンドラが担当）
+            wsToc.addEventListener('click', function() { wsToc.hidden = true; });
+            document.addEventListener('click', function(e) {
+              if (!wsToc.hidden && e.target !== wsTocBtn && !wsToc.contains(e.target)) wsToc.hidden = true;
+            });
+          } catch (e) {}
         </script>
       `;
         html = html.replace('</body>', `${script}</body>`);
