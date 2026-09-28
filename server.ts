@@ -731,7 +731,7 @@ async function startServer() {
             Array.prototype.forEach.call(wsHeadings, function(h) {
               var headEl = h.querySelector('.mw-headline') || h;
               var id = h.id || headEl.id;
-              var text = (headEl.textContent || '').replace(/\[.*?\]/g, '').trim();
+              var text = (headEl.textContent || '').replace(/\\[.*?\\]/g, '').trim();
               if (!id || !text) return;
               var a = document.createElement('a');
               a.setAttribute('href', '#' + encodeURIComponent(id));
