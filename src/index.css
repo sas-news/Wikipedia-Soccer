@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+/* iPad等のタッチ操作でUI領域のドラッグがページ全体のスクロール/バウンスに波及しないようにする */
+html, body {
+  overscroll-behavior: none;
+}
+
+/* 対戦画面の高さ: dvh未対応ブラウザでは100vhにフォールバック */
+.ws-game-root {
+  height: 100vh;
+  height: 100dvh;
+  overscroll-behavior: none;
+}
